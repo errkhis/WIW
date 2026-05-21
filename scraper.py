@@ -234,7 +234,7 @@ def _extract_bidders(soup: BeautifulSoup) -> list[Bidder]:
         fin_norm = _norm(fin_s)
 
         is_eligible = (
-            admin_norm == "admissible"
+            "admissible" in admin_norm
             and fin_norm in ("admissible", "ouverte", "")
             and price is not None
         )
