@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
 from psycopg.rows import dict_row
@@ -63,8 +64,39 @@ def _database_url() -> str:
     for name in ("DATABASE_URL", "POSTGRES_URL", "SUPABASE_DB_URL"):
         url = os.environ.get(name, "").strip()
         if url:
-            return url
+            return _clean_database_url(url)
     raise DatabaseNotConfigured("DATABASE_URL, POSTGRES_URL, or SUPABASE_DB_URL is not configured")
+
+
+def _clean_database_url(url: str) -> str:
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+
+    allowed_query_params = {
+        "application_name",
+        "connect_timeout",
+        "gssencmode",
+        "keepalives",
+        "keepalives_count",
+        "keepalives_idle",
+        "keepalives_interval",
+        "sslcert",
+        "sslcompression",
+        "sslcrl",
+        "sslkey",
+        "sslmode",
+        "sslrootcert",
+        "target_session_attrs",
+    }
+    query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if key in allowed_query_params
+        ]
+    )
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 def _connect():
