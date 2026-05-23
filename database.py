@@ -9,7 +9,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 
-FREE_RESULT_LIMIT = 3
+FREE_RESULT_LIMIT = 5
 PREMIUM_YEARS_DEFAULT = 1
 _DB_INITIALIZED = False
 
