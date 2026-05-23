@@ -8,6 +8,16 @@ import requests as http
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scraper import scrape_consultation
 from calculator import calculate_winners, EXCESSIVE_THRESHOLD, LOW_THRESHOLD
+from database import (
+    FREE_RESULT_LIMIT,
+    DatabaseNotConfigured,
+    QuotaExceeded,
+    can_create_procurement_result,
+    grant_premium,
+    record_procurement_result,
+    set_free,
+    upsert_telegram_user,
+)
 
 from http.server import BaseHTTPRequestHandler
 
@@ -16,6 +26,8 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
+TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "").strip()
+TELEGRAM_ADMIN_USERNAME = os.environ.get("TELEGRAM_ADMIN_USERNAME", "").strip().lstrip("@")
 
 
 # ── Telegram helpers ──────────────────────────────────────────────────────────
@@ -48,6 +60,10 @@ def fmt(n):
     return "—" if n is None else f"{n:,.2f}"
 
 
+def admin_contact():
+    return f"@{TELEGRAM_ADMIN_USERNAME}" if TELEGRAM_ADMIN_USERNAME else "أدمن البوت"
+
+
 # ── Bot content ───────────────────────────────────────────────────────────────
 
 WELCOME = (
@@ -62,10 +78,114 @@ WELCOME = (
     "• العروض الرخيصة بزاف (&lt;-25% من E) ← مستبعدة\n\n"
     "<b>مثال — حط الرابط وسيفطه:</b>\n"
     "<code>https://www.marchespublics.gov.ma/?page=entreprise.SuiviConsultation"
-    "&amp;refConsultation=997895&amp;orgAcronyme=p1v</code>"
+    "&amp;refConsultation=997895&amp;orgAcronyme=p1v</code>\n\n"
+    "━━━━━━━━━━━━━━\n"
+    "🧾 <b>الخطة ديالك دابا: Free</b>\n\n"
+    "عندك <b>3 نتائج مجانية</b> باش تجرب الخدمة وتحسب الرابح ديال الصفقات.\n"
+    "من بعد ما تسالي 3 النتائج، البوت غادي يوقف الحسابات الجديدة حتى تفعل "
+    "<b>Premium</b>.\n\n"
+    "⭐ <b>Premium سنوي</b>\n"
+    "• استعمال غير محدود طول العام\n"
+    "• تقدر تحلل أي عدد من الصفقات\n"
+    "• بلا حد ديال 3 نتائج\n\n"
+    f"باش تفعل Premium، تاصل مع <b>{esc(admin_contact())}</b> فتيليگرام.\n\n"
+    "كتب /me باش تشوف شحال بقا ليك فـ Free."
 )
 
 MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+
+def is_admin(message):
+    if not TELEGRAM_ADMIN_ID:
+        return False
+    sender = message.get("from") or {}
+    return str(sender.get("id", "")) == TELEGRAM_ADMIN_ID
+
+
+def fmt_date(dt):
+    return dt.strftime("%Y-%m-%d") if dt else "—"
+
+
+def subscription_limit_message():
+    return (
+        "🔒 <b>سالاو ليك نتائج الخطة المجانية</b>\n\n"
+        f"الخطة المجانية فيها غير <b>{FREE_RESULT_LIMIT}</b> نتائج ديال الصفقات.\n"
+        "باش تكمل بلا حدود، طلب الاشتراك السنوي Premium من الأدمن:\n"
+        f"<b>{esc(admin_contact())}</b>"
+    )
+
+
+def account_status_message(user):
+    if user.is_premium:
+        return (
+            "👤 <b>الحساب ديالك</b>\n"
+            "الخطة: <b>Premium</b>\n"
+            f"صالحة حتى: <b>{fmt_date(user.premium_expires_at)}</b>\n"
+            "النتائج: <b>غير محدودة</b>"
+        )
+    return (
+        "👤 <b>الحساب ديالك</b>\n"
+        "الخطة: <b>Free</b>\n"
+        f"استعملتي: <b>{user.free_results_used}/{FREE_RESULT_LIMIT}</b>\n"
+        f"الباقي: <b>{user.remaining_free_results}</b>"
+    )
+
+
+def database_error_message():
+    return (
+        "❌ <b>قاعدة البيانات ما موجدهاش السيرفر.</b>\n"
+        "خاص صاحب البوت يضيف DATABASE_URL أو POSTGRES_URL فـ Vercel."
+    )
+
+
+def handle_admin_command(chat_id, text, message):
+    if not (text.startswith("/premium") or text.startswith("/free")):
+        return False
+
+    if not is_admin(message):
+        send(chat_id, "⛔ هاد الأمر خاص بالأدمن فقط.")
+        return True
+
+    parts = text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        send(chat_id, "الصيغة: <code>/premium TELEGRAM_ID [years]</code> أو <code>/free TELEGRAM_ID</code>")
+        return True
+
+    telegram_id = int(parts[1])
+    try:
+        if text.startswith("/premium"):
+            years = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
+            user = grant_premium(telegram_id, years)
+            send(
+                chat_id,
+                "✅ تفعل Premium\n"
+                f"User ID: <code>{user.telegram_id}</code>\n"
+                f"صالحة حتى: <b>{fmt_date(user.premium_expires_at)}</b>",
+            )
+        else:
+            user = set_free(telegram_id)
+            send(chat_id, f"✅ رجع Free\nUser ID: <code>{user.telegram_id}</code>")
+    except DatabaseNotConfigured:
+        send(chat_id, database_error_message())
+    except Exception as exc:
+        log.exception("Admin command error")
+        send(chat_id, f"❌ <b>وقع خطأ:</b> {esc(str(exc)[:400])}")
+    return True
+
+
+def handle_account_command(chat_id, message):
+    sender = message.get("from") or {}
+    if not sender.get("id"):
+        send(chat_id, "❌ ما قدرتش نعرف Telegram user id ديالك.")
+        return
+    try:
+        user = upsert_telegram_user(sender)
+        send(chat_id, account_status_message(user))
+    except DatabaseNotConfigured:
+        send(chat_id, database_error_message())
+    except Exception as exc:
+        log.exception("Account command error")
+        send(chat_id, f"❌ <b>وقع خطأ:</b> {esc(str(exc)[:400])}")
 
 
 def extract_url(message):
@@ -146,7 +266,20 @@ def process_update(update):
     if not text:
         return
 
+    if handle_admin_command(chat_id, text, message):
+        return
+
+    if text.startswith("/me") or text.startswith("/subscription"):
+        handle_account_command(chat_id, message)
+        return
+
     if text.startswith("/start") or text.startswith("/help"):
+        try:
+            upsert_telegram_user(message.get("from") or {"id": chat_id})
+        except DatabaseNotConfigured:
+            log.warning("DATABASE_URL is not configured")
+        except Exception:
+            log.exception("Failed to register user")
         send(chat_id, WELCOME)
         return
 
@@ -156,11 +289,34 @@ def process_update(update):
             send(chat_id, "⚠️ عطيني رابط من <b>marchespublics.gov.ma</b>\n\nكتب /help باش تشوف مثال.")
         return
 
+    try:
+        user = upsert_telegram_user(message.get("from") or {"id": chat_id})
+        if not can_create_procurement_result(user):
+            send(chat_id, subscription_limit_message())
+            return
+    except DatabaseNotConfigured:
+        send(chat_id, database_error_message())
+        return
+    except Exception as exc:
+        log.exception("Database error")
+        send(chat_id, f"❌ <b>وقع خطأ فقاعدة البيانات:</b> {esc(str(exc)[:400])}")
+        return
+
     typing(chat_id)
     send(chat_id, "⏳ كنجيب البيانات وكنحسب...")
 
     try:
-        send(chat_id, build_result(url))
+        result = build_result(url)
+        updated_user = record_procurement_result(user.telegram_id, url)
+        if not updated_user.is_premium:
+            result += (
+                "\n\n"
+                f"🧾 Free: {updated_user.free_results_used}/{FREE_RESULT_LIMIT} "
+                f"· الباقي {updated_user.remaining_free_results}"
+            )
+        send(chat_id, result)
+    except QuotaExceeded:
+        send(chat_id, subscription_limit_message())
     except Exception as exc:
         log.exception("Processing error")
         send(chat_id, f"❌ <b>وقع خطأ:</b> {esc(str(exc)[:400])}")
