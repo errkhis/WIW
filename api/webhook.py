@@ -8,6 +8,7 @@ import requests as http
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scraper import scrape_consultation
 from calculator import calculate_winners
+from company_city import lookup_company_cities
 from database import (
     FREE_RESULT_LIMIT,
     DatabaseNotConfigured,
@@ -39,13 +40,23 @@ def tg(method, payload):
         pass
 
 
-def send(chat_id, text):
-    tg("sendMessage", {
+def send(chat_id, text, reply_markup=None):
+    payload = {
         "chat_id": chat_id,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
-    })
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    tg("sendMessage", payload)
+
+
+def answer_callback(callback_id, text=""):
+    payload = {"callback_query_id": callback_id}
+    if text:
+        payload["text"] = text
+    tg("answerCallbackQuery", payload)
 
 
 def typing(chat_id):
@@ -200,6 +211,42 @@ def extract_url(message):
     return None
 
 
+def consultation_meta_from_url(url):
+    ref_match = re.search(r"refConsultation=([^&]+)", url)
+    org_match = re.search(r"orgAcronyme=([^&]+)", url)
+    if not ref_match:
+        return None, None
+    return ref_match.group(1), org_match.group(1) if org_match else ""
+
+
+def build_consultation_url(reference, org):
+    url = (
+        "https://www.marchespublics.gov.ma/index.php"
+        f"?page=entreprise.SuiviConsultation&refConsultation={reference}"
+    )
+    if org:
+        url += f"&orgAcronyme={org}"
+    return url
+
+
+def send_action_choice(chat_id, url):
+    reference, org = consultation_meta_from_url(url)
+    if not reference:
+        send(chat_id, "❌ Lien invalide : refConsultation est introuvable.")
+        return
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "🏆 Obtenir le gagnant", "callback_data": f"winner:{reference}:{org}"},
+            {"text": "🏙️ Villes des sociétés", "callback_data": f"cities:{reference}:{org}"},
+        ]]
+    }
+    send(
+        chat_id,
+        "Que voulez-vous faire avec cette consultation ?",
+        reply_markup=keyboard,
+    )
+
+
 def build_result(url):
     data = scrape_consultation(url)
     lots = data.lots or [data]
@@ -218,6 +265,25 @@ def build_result(url):
         lines.append("")
 
     return "\n".join(lines).strip()
+
+
+def build_company_cities_result(url):
+    data = scrape_consultation(url)
+    lots = data.lots or [data]
+    if not any(lot.bidders for lot in lots):
+        return "❌ Aucune société trouvée dans cette consultation."
+
+    names = []
+    for lot in lots:
+        names.extend(b.name for b in lot.bidders if b.name)
+
+    cities = lookup_company_cities(names)
+    lines = [f"Consultation: <b>{esc(data.reference)}</b>", ""]
+    lines.append("<b>Villes des sociétés:</b>")
+    for item in cities:
+        city = esc(item.city or "Ville introuvable")
+        lines.append(f"- {esc(item.name)}: <b>{city}</b>")
+    return "\n".join(lines)
 
 
 def _build_lot_result_lines(data, lot_index):
@@ -265,6 +331,11 @@ def _build_lot_result_lines(data, lot_index):
 
 
 def process_update(update):
+    callback = update.get("callback_query")
+    if callback:
+        process_callback(callback)
+        return
+
     message = update.get("message") or update.get("edited_message")
     if not message:
         return
@@ -298,7 +369,40 @@ def process_update(update):
         return
 
     try:
-        user = upsert_telegram_user(message.get("from") or {"id": chat_id})
+        upsert_telegram_user(message.get("from") or {"id": chat_id})
+    except DatabaseNotConfigured:
+        send(chat_id, database_error_message())
+        return
+    except Exception as exc:
+        log.exception("Database error")
+        send(chat_id, f"❌ <b>Erreur base de données :</b> {esc(str(exc)[:400])}")
+        return
+
+    send_action_choice(chat_id, url)
+
+
+def process_callback(callback):
+    callback_id = callback.get("id")
+    message = callback.get("message") or {}
+    chat_id = message.get("chat", {}).get("id")
+    sender = callback.get("from") or {}
+    data = callback.get("data") or ""
+
+    if callback_id:
+        answer_callback(callback_id, "Traitement en cours...")
+    if not chat_id:
+        return
+
+    parts = data.split(":", 2)
+    if len(parts) != 3 or parts[0] not in ("winner", "cities"):
+        send(chat_id, "❌ Action inconnue.")
+        return
+
+    action, reference, org = parts
+    url = build_consultation_url(reference, org)
+
+    try:
+        user = upsert_telegram_user(sender or {"id": chat_id})
         if not can_create_procurement_result(user):
             send(chat_id, subscription_limit_message())
             return
@@ -311,10 +415,13 @@ def process_update(update):
         return
 
     typing(chat_id)
-    send(chat_id, "⏳ Récupération des données et calcul en cours...")
+    if action == "winner":
+        send(chat_id, "⏳ Calcul du gagnant en cours...")
+    else:
+        send(chat_id, "⏳ Recherche des villes des sociétés en cours...")
 
     try:
-        result = build_result(url)
+        result = build_result(url) if action == "winner" else build_company_cities_result(url)
         updated_user = record_procurement_result(user.telegram_id, url)
         if not updated_user.is_premium:
             result += (
