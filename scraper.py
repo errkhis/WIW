@@ -148,12 +148,24 @@ def _fetch_lot_soup(
 
     select_name = select["name"]
     data[select_name] = lot_id
-    data["PRADO_POSTBACK_TARGET"] = select_name
+    data["PRADO_CALLBACK_TARGET"] = select_name
+    data["PRADO_CALLBACK_PARAMETER"] = lot_id
+    data["PRADO_POSTBACK_TARGET"] = ""
     data["PRADO_POSTBACK_PARAMETER"] = ""
 
     action = form.get("action") or url
     action_url = str(httpx.URL(url).join(action))
-    response = client.post(action_url, data=data)
+    response = client.post(
+        action_url,
+        data=data,
+        headers={
+            **HEADERS,
+            "X-Requested-With": "XMLHttpRequest",
+            "X-Prototype-Version": "1.7",
+            "Accept": "text/javascript, text/html, application/xml, text/xml, */*",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        },
+    )
     response.raise_for_status()
     return BeautifulSoup(response.text, "lxml")
 

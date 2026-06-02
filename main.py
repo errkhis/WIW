@@ -46,6 +46,7 @@ class ConsultationResult(BaseModel):
     excessive_threshold: Optional[float] = None
     low_threshold: Optional[float] = None
     total_bidders: int
+    priced_offer_count: int = 0
     eligible_bidders: int
     winner: Optional[str]
     winner_price: Optional[float]
@@ -247,8 +248,9 @@ function render(d){
     <div class="meta-item"><label>Object</label><p style="font-size:.8rem">${d.object}</p></div>
     <div class="meta-item"><label>Procedure</label><p>${d.procedure}</p></div>
     <div class="meta-item"><label>Category</label><p>${d.category}</p></div>
-    <div class="meta-item"><label>Total Bidders</label><p>${d.total_bidders}</p></div>
-    <div class="meta-item"><label>Eligible</label><p>${d.eligible_bidders}</p></div>
+    <div class="meta-item"><label>Companies Found</label><p>${d.total_bidders}</p></div>
+    <div class="meta-item"><label>Priced Offers</label><p>${d.priced_offer_count}</p></div>
+    <div class="meta-item"><label>Ranked Offers</label><p>${d.eligible_bidders}</p></div>
     <div class="meta-item"><label>Est. Price</label><p>${fmt(d.estimated_price)} ${d.estimated_price_currency}</p></div>
     <div class="meta-item"><label>Avg. Offers</label><p>${fmt(d.average_offer_price)} MAD</p></div>
     <div class="meta-item"><label>Avg. vs E</label><p>${fmtPct(d.average_estimation_difference_percent)}</p></div>
@@ -370,6 +372,7 @@ def _to_consultation_result(data) -> ConsultationResult:
         excessive_threshold=None,
         low_threshold=None,
         total_bidders=len(data.bidders),
+        priced_offer_count=len(priced_rankings),
         eligible_bidders=len(eligible_rankings),
         winner=", ".join(r.name for r in winners) if winners else None,
         winner_price=winner.price if winner else None,

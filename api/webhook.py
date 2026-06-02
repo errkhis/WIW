@@ -60,36 +60,35 @@ def fmt(n):
     return "—" if n is None else f"{n:,.2f}"
 
 
+def fmt_pct(n):
+    if n is None:
+        return "—"
+    return f"{'+' if n >= 0 else ''}{n:.2f}%"
+
+
 def admin_contact():
-    return f"@{TELEGRAM_ADMIN_USERNAME}" if TELEGRAM_ADMIN_USERNAME else "أدمن البوت"
+    return f"@{TELEGRAM_ADMIN_USERNAME}" if TELEGRAM_ADMIN_USERNAME else "l'administrateur"
 
 
 # ── Bot content ───────────────────────────────────────────────────────────────
 
 WELCOME = (
-    "🇲🇦 <b>بوت ديال الصفقات العمومية المغربية</b>\n\n"
-    "عطيني أي رابط من <b>marchespublics.gov.ma</b> وغادي نحسب ليك الرابح "
-    "على حساب طريقة ثمن المرجع (المادة 13 من RC).\n\n"
-    "<b>الصيغة:</b>\n"
-    "P = (E + معدل العروض الصالحة) ÷ 2\n"
-    "الرابح = العرض اللي أقرب لـ P من تحت ▼\n\n"
-    "<b>الحساب:</b>\n"
-    "• كنستعمل غير الشركات اللي عندها ثمن\n"
-    "• ما كنقصيوش العروض بسبب +20% أو -25%\n\n"
-    "<b>مثال — حط الرابط وسيفطه:</b>\n"
+    "🇲🇦 <b>Analyse des appels d'offres publics marocains</b>\n\n"
+    "Envoyez un lien <b>marchespublics.gov.ma</b> et le bot calcule le classement "
+    "par lot avec la méthode du prix de référence.\n\n"
+    "<b>Règles utilisées :</b>\n"
+    "• seules les offres avec prix sont utilisées\n"
+    "• les sociétés sans prix ne sont pas incluses dans les calculs\n"
+    "• aucune exclusion automatique par seuil +20% / -25%\n\n"
+    "<b>Exemple :</b>\n"
     "<code>https://www.marchespublics.gov.ma/?page=entreprise.SuiviConsultation"
     "&amp;refConsultation=997895&amp;orgAcronyme=p1v</code>\n\n"
     "━━━━━━━━━━━━━━\n"
-    "🧾 <b>الخطة ديالك دابا: Free</b>\n\n"
-    f"عندك <b>{FREE_RESULT_LIMIT} نتائج مجانية</b> باش تجرب الخدمة وتحسب الرابح ديال الصفقات.\n"
-    f"من بعد ما تسالي {FREE_RESULT_LIMIT} النتائج، البوت غادي يوقف الحسابات الجديدة حتى تفعل "
-    "<b>Premium</b>.\n\n"
-    "⭐ <b>Premium سنوي</b>\n"
-    "• استعمال غير محدود طول العام\n"
-    "• تقدر تحلل أي عدد من الصفقات\n"
-    f"• بلا حد ديال {FREE_RESULT_LIMIT} نتائج\n\n"
-    f"باش تفعل Premium، تاصل مع <b>{esc(admin_contact())}</b> فتيليگرام.\n\n"
-    "كتب /me باش تشوف شحال بقا ليك فـ Free."
+    "🧾 <b>Plan actuel : Free</b>\n\n"
+    f"Vous disposez de <b>{FREE_RESULT_LIMIT} résultats gratuits</b>.\n"
+    "Pour un accès illimité, contactez "
+    f"<b>{esc(admin_contact())}</b>.\n\n"
+    "Utilisez /me pour consulter votre statut."
 )
 
 MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
@@ -108,9 +107,9 @@ def fmt_date(dt):
 
 def subscription_limit_message():
     return (
-        "🔒 <b>سالاو ليك نتائج الخطة المجانية</b>\n\n"
-        f"الخطة المجانية فيها غير <b>{FREE_RESULT_LIMIT}</b> نتائج ديال الصفقات.\n"
-        "باش تكمل بلا حدود، طلب الاشتراك السنوي Premium من الأدمن:\n"
+        "🔒 <b>Limite du plan gratuit atteinte</b>\n\n"
+        f"Le plan gratuit contient <b>{FREE_RESULT_LIMIT}</b> résultats.\n"
+        "Pour continuer sans limite, demandez l'abonnement Premium :\n"
         f"<b>{esc(admin_contact())}</b>"
     )
 
@@ -118,23 +117,23 @@ def subscription_limit_message():
 def account_status_message(user):
     if user.is_premium:
         return (
-            "👤 <b>الحساب ديالك</b>\n"
-            "الخطة: <b>Premium</b>\n"
-            f"صالحة حتى: <b>{fmt_date(user.premium_expires_at)}</b>\n"
-            "النتائج: <b>غير محدودة</b>"
+            "👤 <b>Votre compte</b>\n"
+            "Plan : <b>Premium</b>\n"
+            f"Valide jusqu'au : <b>{fmt_date(user.premium_expires_at)}</b>\n"
+            "Résultats : <b>illimités</b>"
         )
     return (
-        "👤 <b>الحساب ديالك</b>\n"
-        "الخطة: <b>Free</b>\n"
-        f"استعملتي: <b>{user.free_results_used}/{FREE_RESULT_LIMIT}</b>\n"
-        f"الباقي: <b>{user.remaining_free_results}</b>"
+        "👤 <b>Votre compte</b>\n"
+        "Plan : <b>Free</b>\n"
+        f"Utilisés : <b>{user.free_results_used}/{FREE_RESULT_LIMIT}</b>\n"
+        f"Restants : <b>{user.remaining_free_results}</b>"
     )
 
 
 def database_error_message():
     return (
-        "❌ <b>قاعدة البيانات ما موجدهاش السيرفر.</b>\n"
-        "خاص صاحب البوت يضيف DATABASE_URL أو POSTGRES_URL فـ Vercel."
+        "❌ <b>Base de données non configurée.</b>\n"
+        "Ajoutez DATABASE_URL ou POSTGRES_URL dans Vercel."
     )
 
 
@@ -143,12 +142,12 @@ def handle_admin_command(chat_id, text, message):
         return False
 
     if not is_admin(message):
-        send(chat_id, "⛔ هاد الأمر خاص بالأدمن فقط.")
+        send(chat_id, "⛔ Cette commande est réservée à l'administrateur.")
         return True
 
     parts = text.split()
     if len(parts) < 2 or not parts[1].isdigit():
-        send(chat_id, "الصيغة: <code>/premium TELEGRAM_ID [years]</code> أو <code>/free TELEGRAM_ID</code>")
+        send(chat_id, "Format : <code>/premium TELEGRAM_ID [years]</code> ou <code>/free TELEGRAM_ID</code>")
         return True
 
     telegram_id = int(parts[1])
@@ -158,25 +157,25 @@ def handle_admin_command(chat_id, text, message):
             user = grant_premium(telegram_id, years)
             send(
                 chat_id,
-                "✅ تفعل Premium\n"
+                "✅ Premium activé\n"
                 f"User ID: <code>{user.telegram_id}</code>\n"
-                f"صالحة حتى: <b>{fmt_date(user.premium_expires_at)}</b>",
+                f"Valide jusqu'au : <b>{fmt_date(user.premium_expires_at)}</b>",
             )
         else:
             user = set_free(telegram_id)
-            send(chat_id, f"✅ رجع Free\nUser ID: <code>{user.telegram_id}</code>")
+            send(chat_id, f"✅ Plan Free rétabli\nUser ID: <code>{user.telegram_id}</code>")
     except DatabaseNotConfigured:
         send(chat_id, database_error_message())
     except Exception as exc:
         log.exception("Admin command error")
-        send(chat_id, f"❌ <b>وقع خطأ:</b> {esc(str(exc)[:400])}")
+        send(chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}")
     return True
 
 
 def handle_account_command(chat_id, message):
     sender = message.get("from") or {}
     if not sender.get("id"):
-        send(chat_id, "❌ ما قدرتش نعرف Telegram user id ديالك.")
+        send(chat_id, "❌ Impossible d'identifier votre Telegram user id.")
         return
     try:
         user = upsert_telegram_user(sender)
@@ -185,7 +184,7 @@ def handle_account_command(chat_id, message):
         send(chat_id, database_error_message())
     except Exception as exc:
         log.exception("Account command error")
-        send(chat_id, f"❌ <b>وقع خطأ:</b> {esc(str(exc)[:400])}")
+        send(chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}")
 
 
 def extract_url(message):
@@ -205,39 +204,30 @@ def build_result(url):
     data = scrape_consultation(url)
     lots = data.lots or [data]
     if not any(lot.bidders for lot in lots):
-        return "❌ ما لقيناش معطيات. تأكد أن الرابط ديالك فيه نتائج المناقصة كاملة."
+        return "❌ Aucune donnée trouvée. Vérifiez que le lien contient les résultats de la consultation."
 
     lines = []
-    lines.append(f"📋 <b>المناقصة رقم {esc(data.reference)}</b>")
-    lines.append(f"🔹 {esc(data.object)}")
+    lines.append(f"Consultation: <b>{esc(data.reference)}</b>")
     lines.append("")
     if len(lots) > 1:
-        lines.append(f"📦 <b>هاد الصفقة فيها {len(lots)} lots، الحساب مفصول لكل lot.</b>")
+        lines.append(f"Cette consultation contient <b>{len(lots)} lots</b>.")
         lines.append("")
 
     for lot_index, lot in enumerate(lots, start=1):
-        if len(lots) > 1:
-            title = lot.lot_label or f"Lot {lot_index}"
-            lines.append(f"━━━━━━━━━━━━━━")
-            lines.append(f"📌 <b>{esc(title)}</b>")
-            lines.append("")
-
-        lines.extend(_build_lot_result_lines(lot))
+        lines.extend(_build_lot_result_lines(lot, lot_index))
         lines.append("")
 
-    lines.append("<i>المادة 13 من RC · المرسوم رقم 2-22-431</i>")
     return "\n".join(lines).strip()
 
 
-def _build_lot_result_lines(data):
+def _build_lot_result_lines(data, lot_index):
     rankings, _, ref_price = calculate_winners(data)
     priced_rankings = [
         r for r in rankings
         if r.price is not None and not r.note.startswith("Eliminated")
     ]
     eligible = [r for r in rankings if r.is_eligible]
-    eliminated = [r for r in rankings if not r.is_eligible]
-    top10 = (eligible or priced_rankings)[:10]
+    ordered = eligible or priced_rankings
     winner = next((r for r in eligible if r.position == 1), None)
     winners = [r for r in eligible if winner and r.price == winner.price]
     E = data.estimated_price
@@ -251,51 +241,25 @@ def _build_lot_result_lines(data):
     )
 
     lines = []
-    if winner:
-        title = "الرابح" if len(winners) == 1 else "الرابحين بنفس الثمن"
-        lines.append(f"🏆 <b>{title}:</b>")
-        for r in winners:
-            lines.append(f"• <b>{esc(r.name)}</b>")
-        lines.append(f"💰 العرض: <b>{fmt(winner.price)} درهم</b>")
-        lines.append(f"📏 الفرق مع P: {fmt(ref_price - winner.price)} درهم تحت")
-        lines.append("")
-    elif not E:
-        lines.append("⚠️ <b>ما قدرناش نحسب الرابح حيث التقدير E ما باينش فهاد الصفحة.</b>")
-        lines.append("غادي نعرض غير الشركات اللي عندها ثمن، بلا انتظار admissible.")
-        lines.append("")
+    lines.append(f"<b>Lot {data.lot_id or lot_index}:</b>")
+    lines.append("")
+    lines.append(f"- Sociétés trouvées: <b>{len(data.bidders)}</b>")
+    lines.append(f"- Offres avec prix utilisées: <b>{len(priced_rankings)}</b>")
+    lines.append(f"- E: <b>{fmt(E)}</b>")
+    lines.append(f"- Moyenne: <b>{fmt(avg_price)}</b>")
+    lines.append(f"- Écart: <b>{fmt_pct(avg_diff_pct)}</b>")
+    if len(winners) > 1:
+        lines.append(f"- Prix gagnant ex aequo: <b>{fmt(winner.price)}</b>")
+        lines.append("- Gagnants: <b>" + esc(", ".join(r.name for r in winners)) + "</b>")
+    elif winner:
+        lines.append(f"- Gagnant: <b>{esc(winner.name)}</b>")
     else:
-        lines.append("❌ <b>ما كاينش رابح مقبول</b>")
-        lines.append("")
-
-    lines.append("📊 <b>تحليل الأثمنة</b>")
-    if E:
-        lines.append(f"• التقدير (E): {fmt(E)} {esc(data.estimated_price_currency)}")
-    if avg_price is not None:
-        lines.append(f"• <b>معدل جميع العروض بثمن: {fmt(avg_price)} درهم</b>")
-    if avg_diff_pct is not None:
-        sign = "+" if avg_diff_pct >= 0 else ""
-        lines.append(f"• <b>فرق المعدل مع التقدير: {sign}{avg_diff_pct:.2f}%</b>")
-    if ref_price:
-        lines.append(f"• ثمن المرجع (P): <b>{fmt(ref_price)} درهم</b>")
-    lines.append(f"• عروض بثمن / المجموع: {len(priced_rankings)} / {len(data.bidders)}")
-    if eliminated:
-        lines.append(f"• المستبعدين: {len(eliminated)}")
+        lines.append("- Gagnant: <b>—</b>")
     lines.append("")
 
-    label = "أحسن" if ref_price else "العروض اللي عندها ثمن"
-    lines.append(f"🏅 <b>{label} {len(top10)} عروض</b>")
-    for i, r in enumerate(top10):
-        medal = MEDALS[i] if i < len(MEDALS) else f"{i+1}."
-        if r.side == "N/A":
-            side = ""
-        else:
-            arrow = "▼" if r.side == "below" else "▲"
-            side_label = "تحت P" if r.side == "below" else "فوق P"
-            side = f"  ·  Δ {fmt(r.distance_to_ref)}  ·  {arrow} {side_label}"
-        lines.append(
-            f"{medal} <b>{esc(r.name)}</b>\n"
-            f"   {fmt(r.price)} درهم{side}"
-        )
+    lines.append("<b>Classement des sociétés:</b>")
+    for i, r in enumerate(ordered, start=1):
+        lines.append(f"{i}. {esc(r.name)} - {fmt(r.price)}")
     return lines
 
 
@@ -329,7 +293,7 @@ def process_update(update):
     url = extract_url(message)
     if not url:
         if not text.startswith("/"):
-            send(chat_id, "⚠️ عطيني رابط من <b>marchespublics.gov.ma</b>\n\nكتب /help باش تشوف مثال.")
+            send(chat_id, "⚠️ Envoyez un lien <b>marchespublics.gov.ma</b>.\n\nUtilisez /help pour voir un exemple.")
         return
 
     try:
@@ -342,11 +306,11 @@ def process_update(update):
         return
     except Exception as exc:
         log.exception("Database error")
-        send(chat_id, f"❌ <b>وقع خطأ فقاعدة البيانات:</b> {esc(str(exc)[:400])}")
+        send(chat_id, f"❌ <b>Erreur base de données :</b> {esc(str(exc)[:400])}")
         return
 
     typing(chat_id)
-    send(chat_id, "⏳ كنجيب البيانات وكنحسب...")
+    send(chat_id, "⏳ Récupération des données et calcul en cours...")
 
     try:
         result = build_result(url)
@@ -355,14 +319,14 @@ def process_update(update):
             result += (
                 "\n\n"
                 f"🧾 Free: {updated_user.free_results_used}/{FREE_RESULT_LIMIT} "
-                f"· الباقي {updated_user.remaining_free_results}"
+                f"· restants {updated_user.remaining_free_results}"
             )
         send(chat_id, result)
     except QuotaExceeded:
         send(chat_id, subscription_limit_message())
     except Exception as exc:
         log.exception("Processing error")
-        send(chat_id, f"❌ <b>وقع خطأ:</b> {esc(str(exc)[:400])}")
+        send(chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}")
 
 
 # ── Vercel native handler ─────────────────────────────────────────────────────
@@ -370,7 +334,7 @@ def process_update(update):
 class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-        self._ok("البوت خدام ✓".encode("utf-8"))
+        self._ok("Bot actif ✓".encode("utf-8"))
 
     def do_POST(self):
         try:
