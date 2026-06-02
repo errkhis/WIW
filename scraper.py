@@ -27,6 +27,9 @@ class ConsultationData:
     bidders: list[Bidder] = field(default_factory=list)
     technical_weight: Optional[float] = None
     financial_weight: Optional[float] = None
+    lot_id: Optional[str] = None
+    lot_label: Optional[str] = None
+    lots: list["ConsultationData"] = field(default_factory=list)
 
 
 HEADERS = {
@@ -67,33 +70,148 @@ def scrape_consultation(url: str) -> ConsultationData:
     with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=30) as client:
         response = client.get(url)
         response.raise_for_status()
+        soup = BeautifulSoup(response.text, "lxml")
+        data = _build_consultation_data(url, soup)
 
-    soup = BeautifulSoup(response.text, "lxml")
+        lot_options = _extract_lot_options(soup)
+        lot_estimates = _fetch_lot_estimates(client, url)
+        if len(lot_options) > 1:
+            lots = []
+            for lot_id, lot_label in lot_options:
+                lot_soup = _fetch_lot_soup(client, url, soup, lot_id)
+                lot_data = _build_consultation_data(url, lot_soup, lot_id, lot_label)
+                if lot_id in lot_estimates:
+                    lot_data.estimated_price, lot_data.estimated_price_currency = lot_estimates[lot_id]
+                lots.append(lot_data)
+            data.lots = lots
+            if lots:
+                data.bidders = [b for lot in lots for b in lot.bidders]
+        elif "1" in lot_estimates:
+            data.estimated_price, data.estimated_price_currency = lot_estimates["1"]
 
-    reference = _meta_from_url(url)
-    obj = _extract_object(soup)
-    procedure = _extract_labeled_field(soup, r"proc[eé]dure")
-    category = _extract_labeled_field(soup, r"cat[eé]gorie")
+        return data
+
+
+def _build_consultation_data(
+    url: str,
+    soup: BeautifulSoup,
+    lot_id: Optional[str] = None,
+    lot_label: Optional[str] = None,
+) -> ConsultationData:
     estimated_price, currency = _extract_estimated_price(soup)
     technical_weight, financial_weight = _extract_weights(soup)
-    bidders = _extract_bidders(soup)
-
     return ConsultationData(
-        reference=reference,
-        object=obj,
+        reference=_meta_from_url(url),
+        object=_extract_object(soup),
         estimated_price=estimated_price,
         estimated_price_currency=currency,
-        procedure=procedure,
-        category=category,
-        bidders=bidders,
+        procedure=_extract_labeled_field(soup, r"proc[eé]dure"),
+        category=_extract_labeled_field(soup, r"cat[eé]gorie"),
+        bidders=_extract_bidders(soup),
         technical_weight=technical_weight,
         financial_weight=financial_weight,
+        lot_id=lot_id,
+        lot_label=lot_label,
     )
+
+
+def _extract_lot_options(soup: BeautifulSoup) -> list[tuple[str, str]]:
+    select = soup.find("select", id=re.compile(r"lotsDropDownList", re.I))
+    if not select:
+        return []
+    lots = []
+    for opt in select.find_all("option"):
+        value = (opt.get("value") or "").strip()
+        label = opt.get_text(" ", strip=True)
+        if value and label:
+            lots.append((value, label))
+    return lots
+
+
+def _fetch_lot_soup(
+    client: httpx.Client,
+    url: str,
+    base_soup: BeautifulSoup,
+    lot_id: str,
+) -> BeautifulSoup:
+    form = base_soup.find("form")
+    select = base_soup.find("select", id=re.compile(r"lotsDropDownList", re.I))
+    if not form or not select or not select.get("name"):
+        return base_soup
+
+    data = {}
+    for inp in form.find_all("input"):
+        name = inp.get("name")
+        input_type = (inp.get("type") or "").lower()
+        if name and input_type not in ("image", "submit", "button"):
+            data[name] = inp.get("value", "")
+
+    select_name = select["name"]
+    data[select_name] = lot_id
+    data["PRADO_POSTBACK_TARGET"] = select_name
+    data["PRADO_POSTBACK_PARAMETER"] = ""
+
+    action = form.get("action") or url
+    action_url = str(httpx.URL(url).join(action))
+    response = client.post(action_url, data=data)
+    response.raise_for_status()
+    return BeautifulSoup(response.text, "lxml")
+
+
+def _fetch_lot_estimates(
+    client: httpx.Client,
+    url: str,
+) -> dict[str, tuple[float, str]]:
+    reference = _meta_from_url(url)
+    org = _meta_from_url_param(url, "orgAcronyme") or _meta_from_url_param(url, "orgAccronyme")
+    if not reference or not org:
+        return {}
+
+    popup_url = (
+        f"https://www.marchespublics.gov.ma/index.php"
+        f"?page=commun.PopUpDetailLots&orgAccronyme={org}"
+        f"&refConsultation={reference}&lang=fr"
+    )
+    try:
+        response = client.get(popup_url)
+        response.raise_for_status()
+    except httpx.HTTPError:
+        return {}
+
+    soup = BeautifulSoup(response.text, "lxml")
+    estimates: dict[str, tuple[float, str]] = {}
+    for tag in soup.find_all(id=re.compile(r"repeaterLots_ctl(\d+).*panelReferentielZoneText", re.I)):
+        text = tag.get_text(" ", strip=True)
+        if not re.search(r"estimation", text, re.I):
+            continue
+        value = _parse_first_price(text)
+        if value is None:
+            continue
+        idx_match = re.search(r"repeaterLots_ctl(\d+)", tag.get("id", ""), re.I)
+        if not idx_match:
+            continue
+        lot_id = str(int(idx_match.group(1)) + 1)
+        currency = "MAD TTC" if re.search(r"TTC", text, re.I) else "MAD"
+        estimates[lot_id] = (value, currency)
+    return estimates
+
+
+def _parse_first_price(text: str) -> Optional[float]:
+    for match in re.findall(r"\d[\d\s.\xa0 ]*,\d{2}", text):
+        value = _parse_price_fr(match)
+        if value is not None:
+            return value
+    return _parse_price_fr(text)
 
 
 def _meta_from_url(url: str) -> str:
     m = re.search(r"refConsultation=(\w+)", url)
     return m.group(1) if m else "Unknown"
+
+
+def _meta_from_url_param(url: str, name: str) -> Optional[str]:
+    m = re.search(rf"[?&]{re.escape(name)}=([^&]+)", url)
+    return m.group(1) if m else None
 
 
 def _extract_object(soup: BeautifulSoup) -> str:
@@ -230,15 +348,6 @@ def _extract_bidders(soup: BeautifulSoup) -> list[Bidder]:
         price = _parse_price_fr(price_t)
         score = _parse_price_fr(score_t) if score_t else None
 
-        admin_norm = _norm(admin_s)
-        fin_norm = _norm(fin_s)
-
-        is_eligible = (
-            "admissible" in admin_norm
-            and fin_norm in ("admissible", "ouverte", "")
-            and price is not None
-        )
-
         bidders.append(
             Bidder(
                 rank=idx,
@@ -247,7 +356,7 @@ def _extract_bidders(soup: BeautifulSoup) -> list[Bidder]:
                 financial_status=fin_s,
                 price=price,
                 technical_score=score if score and score <= 100 else None,
-                is_eligible=is_eligible,
+                is_eligible=price is not None,
             )
         )
 

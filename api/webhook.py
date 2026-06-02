@@ -7,7 +7,7 @@ import requests as http
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scraper import scrape_consultation
-from calculator import calculate_winners, EXCESSIVE_THRESHOLD, LOW_THRESHOLD
+from calculator import calculate_winners
 from database import (
     FREE_RESULT_LIMIT,
     DatabaseNotConfigured,
@@ -73,9 +73,9 @@ WELCOME = (
     "<b>الصيغة:</b>\n"
     "P = (E + معدل العروض الصالحة) ÷ 2\n"
     "الرابح = العرض اللي أقرب لـ P من تحت ▼\n\n"
-    "<b>التصفية اللي كتتطبق بشكل أوتوماتيكي:</b>\n"
-    "• العروض الغالية بزاف (&gt;+20% من E) ← مستبعدة\n"
-    "• العروض الرخيصة بزاف (&lt;-25% من E) ← مستبعدة\n\n"
+    "<b>الحساب:</b>\n"
+    "• كنستعمل غير الشركات اللي عندها ثمن\n"
+    "• ما كنقصيوش العروض بسبب +20% أو -25%\n\n"
     "<b>مثال — حط الرابط وسيفطه:</b>\n"
     "<code>https://www.marchespublics.gov.ma/?page=entreprise.SuiviConsultation"
     "&amp;refConsultation=997895&amp;orgAcronyme=p1v</code>\n\n"
@@ -203,26 +203,65 @@ def extract_url(message):
 
 def build_result(url):
     data = scrape_consultation(url)
-    if not data.bidders:
+    lots = data.lots or [data]
+    if not any(lot.bidders for lot in lots):
         return "❌ ما لقيناش معطيات. تأكد أن الرابط ديالك فيه نتائج المناقصة كاملة."
-
-    rankings, _, ref_price = calculate_winners(data)
-    eligible = [r for r in rankings if r.is_eligible]
-    eliminated = [r for r in rankings if not r.is_eligible]
-    top10 = eligible[:10]
-    winner = top10[0] if top10 else None
-    E = data.estimated_price
 
     lines = []
     lines.append(f"📋 <b>المناقصة رقم {esc(data.reference)}</b>")
     lines.append(f"🔹 {esc(data.object)}")
     lines.append("")
+    if len(lots) > 1:
+        lines.append(f"📦 <b>هاد الصفقة فيها {len(lots)} lots، الحساب مفصول لكل lot.</b>")
+        lines.append("")
 
+    for lot_index, lot in enumerate(lots, start=1):
+        if len(lots) > 1:
+            title = lot.lot_label or f"Lot {lot_index}"
+            lines.append(f"━━━━━━━━━━━━━━")
+            lines.append(f"📌 <b>{esc(title)}</b>")
+            lines.append("")
+
+        lines.extend(_build_lot_result_lines(lot))
+        lines.append("")
+
+    lines.append("<i>المادة 13 من RC · المرسوم رقم 2-22-431</i>")
+    return "\n".join(lines).strip()
+
+
+def _build_lot_result_lines(data):
+    rankings, _, ref_price = calculate_winners(data)
+    priced_rankings = [
+        r for r in rankings
+        if r.price is not None and not r.note.startswith("Eliminated")
+    ]
+    eligible = [r for r in rankings if r.is_eligible]
+    eliminated = [r for r in rankings if not r.is_eligible]
+    top10 = (eligible or priced_rankings)[:10]
+    winner = next((r for r in eligible if r.position == 1), None)
+    winners = [r for r in eligible if winner and r.price == winner.price]
+    E = data.estimated_price
+    avg_price = (
+        sum(r.price for r in priced_rankings) / len(priced_rankings)
+        if priced_rankings else None
+    )
+    avg_diff_pct = (
+        (avg_price - E) / E * 100
+        if avg_price is not None and E else None
+    )
+
+    lines = []
     if winner:
-        lines.append(f"🏆 <b>الرابح: {esc(winner.name)}</b>")
+        title = "الرابح" if len(winners) == 1 else "الرابحين بنفس الثمن"
+        lines.append(f"🏆 <b>{title}:</b>")
+        for r in winners:
+            lines.append(f"• <b>{esc(r.name)}</b>")
         lines.append(f"💰 العرض: <b>{fmt(winner.price)} درهم</b>")
-        if ref_price:
-            lines.append(f"📏 الفرق مع P: {fmt(ref_price - winner.price)} درهم تحت")
+        lines.append(f"📏 الفرق مع P: {fmt(ref_price - winner.price)} درهم تحت")
+        lines.append("")
+    elif not E:
+        lines.append("⚠️ <b>ما قدرناش نحسب الرابح حيث التقدير E ما باينش فهاد الصفحة.</b>")
+        lines.append("غادي نعرض غير الشركات اللي عندها ثمن، بلا انتظار admissible.")
         lines.append("")
     else:
         lines.append("❌ <b>ما كاينش رابح مقبول</b>")
@@ -231,29 +270,33 @@ def build_result(url):
     lines.append("📊 <b>تحليل الأثمنة</b>")
     if E:
         lines.append(f"• التقدير (E): {fmt(E)} {esc(data.estimated_price_currency)}")
+    if avg_price is not None:
+        lines.append(f"• <b>معدل جميع العروض بثمن: {fmt(avg_price)} درهم</b>")
+    if avg_diff_pct is not None:
+        sign = "+" if avg_diff_pct >= 0 else ""
+        lines.append(f"• <b>فرق المعدل مع التقدير: {sign}{avg_diff_pct:.2f}%</b>")
     if ref_price:
         lines.append(f"• ثمن المرجع (P): <b>{fmt(ref_price)} درهم</b>")
-    if E:
-        lines.append(f"• الحد الأقصى (+20%): {fmt(E * EXCESSIVE_THRESHOLD)} درهم")
-        lines.append(f"• الحد الأدنى (-25%): {fmt(E * LOW_THRESHOLD)} درهم")
-    lines.append(f"• المقبولين / المجموع: {len(eligible)} / {len(data.bidders)}")
+    lines.append(f"• عروض بثمن / المجموع: {len(priced_rankings)} / {len(data.bidders)}")
     if eliminated:
         lines.append(f"• المستبعدين: {len(eliminated)}")
     lines.append("")
 
-    lines.append(f"🏅 <b>أحسن {len(top10)} عروض</b>")
+    label = "أحسن" if ref_price else "العروض اللي عندها ثمن"
+    lines.append(f"🏅 <b>{label} {len(top10)} عروض</b>")
     for i, r in enumerate(top10):
         medal = MEDALS[i] if i < len(MEDALS) else f"{i+1}."
-        arrow = "▼" if r.side == "below" else "▲"
-        side_label = "تحت P" if r.side == "below" else "فوق P"
+        if r.side == "N/A":
+            side = ""
+        else:
+            arrow = "▼" if r.side == "below" else "▲"
+            side_label = "تحت P" if r.side == "below" else "فوق P"
+            side = f"  ·  Δ {fmt(r.distance_to_ref)}  ·  {arrow} {side_label}"
         lines.append(
             f"{medal} <b>{esc(r.name)}</b>\n"
-            f"   {fmt(r.price)} درهم  ·  Δ {fmt(r.distance_to_ref)}  ·  {arrow} {side_label}"
+            f"   {fmt(r.price)} درهم{side}"
         )
-
-    lines.append("")
-    lines.append("<i>المادة 13 من RC · المرسوم رقم 2-22-431</i>")
-    return "\n".join(lines)
+    return lines
 
 
 def process_update(update):

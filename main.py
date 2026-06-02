@@ -1,11 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import httpx
 
 from scraper import scrape_consultation
-from calculator import calculate_winners, RankedBidder, EXCESSIVE_THRESHOLD, LOW_THRESHOLD
+from calculator import calculate_winners, RankedBidder
 
 app = FastAPI(
     title="Moroccan Procurement Winner",
@@ -40,15 +40,20 @@ class ConsultationResult(BaseModel):
     category: str
     estimated_price: Optional[float]
     estimated_price_currency: str
+    average_offer_price: Optional[float] = None
+    average_estimation_difference_percent: Optional[float] = None
     reference_price: Optional[float]
-    excessive_threshold: Optional[float]
-    low_threshold: Optional[float]
+    excessive_threshold: Optional[float] = None
+    low_threshold: Optional[float] = None
     total_bidders: int
     eligible_bidders: int
     winner: Optional[str]
     winner_price: Optional[float]
     top10: list[BidderResult]
     all_rankings: list[BidderResult]
+    lot_id: Optional[str] = None
+    lot_label: Optional[str] = None
+    lots: list["ConsultationResult"] = Field(default_factory=list)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -166,6 +171,7 @@ def index():
 <script>
 const fmt = n => n==null ? '—' :
   new Intl.NumberFormat('fr-MA',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n);
+const fmtPct = n => n==null ? '—' : `${n>=0?'+':''}${fmt(n)}%`;
 
 function badge(s){
   if(!s) return '';
@@ -227,12 +233,12 @@ function render(d){
   document.getElementById('ref-box').innerHTML=`
     <strong>Reference price formula (Art. 13 RC):</strong>
     P = (E + average of valid offers) / 2
-    &nbsp;=&nbsp; (${fmt(d.estimated_price)} + avg) / 2
+    &nbsp;=&nbsp; (${fmt(d.estimated_price)} + <strong>${fmt(d.average_offer_price)}</strong>) / 2
     &nbsp;=&nbsp; <strong>${fmt(d.reference_price)} MAD</strong>
     &nbsp;&nbsp;|&nbsp;&nbsp;
-    Excessive threshold: ${fmt(d.excessive_threshold)} MAD (+20%)
+    <strong>Avg offers: ${fmt(d.average_offer_price)} MAD</strong>
     &nbsp;&nbsp;|&nbsp;&nbsp;
-    Low threshold: ${fmt(d.low_threshold)} MAD (-25%)
+    <strong>Avg vs E: ${fmtPct(d.average_estimation_difference_percent)}</strong>
   `;
 
   // Meta
@@ -244,6 +250,8 @@ function render(d){
     <div class="meta-item"><label>Total Bidders</label><p>${d.total_bidders}</p></div>
     <div class="meta-item"><label>Eligible</label><p>${d.eligible_bidders}</p></div>
     <div class="meta-item"><label>Est. Price</label><p>${fmt(d.estimated_price)} ${d.estimated_price_currency}</p></div>
+    <div class="meta-item"><label>Avg. Offers</label><p>${fmt(d.average_offer_price)} MAD</p></div>
+    <div class="meta-item"><label>Avg. vs E</label><p>${fmtPct(d.average_estimation_difference_percent)}</p></div>
     <div class="meta-item"><label>Ref. Price P</label><p>${fmt(d.reference_price)} MAD</p></div>
   `;
 
@@ -310,14 +318,31 @@ async def analyze(request: ConsultationRequest):
             detail="No bidder data found. Make sure the URL points to a 'SuiviConsultation' results page.",
         )
 
-    rankings, method, reference_price = calculate_winners(data)
+    result = _to_consultation_result(data)
+    if data.lots:
+        result.lots = [_to_consultation_result(lot) for lot in data.lots]
+    return result
+
+
+def _to_consultation_result(data) -> ConsultationResult:
+    rankings, _, reference_price = calculate_winners(data)
 
     winner = next((r for r in rankings if r.position == 1 and r.is_eligible), None)
+    winners = [r for r in rankings if winner and r.is_eligible and r.price == winner.price]
     eligible_rankings = [r for r in rankings if r.is_eligible]
-    top5 = eligible_rankings[:10]
-
-    excessive_thresh = data.estimated_price * EXCESSIVE_THRESHOLD if data.estimated_price else None
-    low_thresh = data.estimated_price * LOW_THRESHOLD if data.estimated_price else None
+    priced_rankings = [
+        r for r in rankings
+        if r.price is not None and not r.note.startswith("Eliminated")
+    ]
+    average_offer_price = (
+        sum(r.price for r in priced_rankings) / len(priced_rankings)
+        if priced_rankings else None
+    )
+    average_diff_percent = (
+        (average_offer_price - data.estimated_price) / data.estimated_price * 100
+        if average_offer_price is not None and data.estimated_price else None
+    )
+    top10 = (eligible_rankings or priced_rankings)[:10]
 
     def to_result(r: RankedBidder) -> BidderResult:
         return BidderResult(
@@ -339,13 +364,18 @@ async def analyze(request: ConsultationRequest):
         category=data.category,
         estimated_price=data.estimated_price,
         estimated_price_currency=data.estimated_price_currency,
+        average_offer_price=round(average_offer_price, 2) if average_offer_price is not None else None,
+        average_estimation_difference_percent=round(average_diff_percent, 2) if average_diff_percent is not None else None,
         reference_price=round(reference_price, 2) if reference_price else None,
-        excessive_threshold=round(excessive_thresh, 2) if excessive_thresh else None,
-        low_threshold=round(low_thresh, 2) if low_thresh else None,
+        excessive_threshold=None,
+        low_threshold=None,
         total_bidders=len(data.bidders),
         eligible_bidders=len(eligible_rankings),
-        winner=winner.name if winner else None,
+        winner=", ".join(r.name for r in winners) if winners else None,
         winner_price=winner.price if winner else None,
-        top10=[to_result(r) for r in top5],
+        top10=[to_result(r) for r in top10],
         all_rankings=[to_result(r) for r in rankings],
+        lot_id=data.lot_id,
+        lot_label=data.lot_label,
+        lots=[],
     )
