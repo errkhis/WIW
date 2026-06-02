@@ -257,9 +257,10 @@ def _build_lot_result_lines(data, lot_index):
         lines.append("- Gagnant: <b>—</b>")
     lines.append("")
 
-    lines.append("<b>Classement des sociétés:</b>")
-    for i, r in enumerate(ordered, start=1):
-        lines.append(f"{i}. {esc(r.name)} - {fmt(r.price)}")
+    lines.append("<b>Top 5 des sociétés:</b>")
+    for i, r in enumerate(ordered[:5], start=1):
+        icon = MEDALS[i - 1] if i <= len(MEDALS) else f"{i}."
+        lines.append(f"{icon} {esc(r.name)} - {fmt(r.price)}")
     return lines
 
 
