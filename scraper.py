@@ -14,6 +14,8 @@ class Bidder:
     price: Optional[float]
     technical_score: Optional[float] = None
     is_eligible: bool = False
+    price_before_raw: str = ""
+    price_after_raw: str = ""
 
 
 @dataclass
@@ -375,6 +377,8 @@ def _extract_bidders(soup: BeautifulSoup) -> list[Bidder]:
                 price=price,
                 technical_score=score if score and score <= 100 else None,
                 is_eligible=price is not None,
+                price_before_raw=price_before_t,
+                price_after_raw=price_after_t,
             )
         )
 

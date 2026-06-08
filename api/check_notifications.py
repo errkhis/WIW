@@ -54,9 +54,49 @@ def _has_complete_prices(data) -> bool:
     for lot in lots:
         if not lot.bidders:
             return False
-        if any(bidder.price is None for bidder in lot.bidders):
+        if any(_is_waiting_for_price(bidder) for bidder in lot.bidders):
             return False
     return True
+
+
+def _is_waiting_for_price(bidder) -> bool:
+    if bidder.price is not None:
+        return False
+
+    before = getattr(bidder, "price_before_raw", "")
+    after = getattr(bidder, "price_after_raw", "")
+    before_clean = before.strip()
+    after_clean = after.strip()
+
+    # Empty cells mean the bidder did not submit for that lot; do not block.
+    if not before_clean and not after_clean:
+        return False
+
+    # Eliminated bidders can keep "-" forever; do not block complete results.
+    if _is_eliminated_bidder(bidder):
+        return False
+
+    # A non-eliminated bidder with "-" is still waiting for prices to publish.
+    return before_clean == "-" or after_clean == "-"
+
+
+def _is_eliminated_bidder(bidder) -> bool:
+    text = f"{getattr(bidder, 'admin_status', '')} {getattr(bidder, 'financial_status', '')}"
+    norm = _norm_status(text)
+    return "ecarte" in norm or "rejet" in norm
+
+
+def _norm_status(text: str) -> str:
+    return (
+        text.strip()
+        .lower()
+        .replace("é", "e")
+        .replace("è", "e")
+        .replace("ê", "e")
+        .replace("à", "a")
+        .replace("â", "a")
+        .replace("ç", "c")
+    )
 
 
 def _notification_keyboard(reference: str, org: str) -> dict:
