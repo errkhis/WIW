@@ -15,8 +15,10 @@ from database import (
     QuotaExceeded,
     can_create_procurement_result,
     grant_premium,
+    list_pending_bid_watches,
     record_procurement_result,
     set_free,
+    stop_bid_watch,
     upsert_telegram_user,
     watch_bid_result,
 )
@@ -100,7 +102,29 @@ WELCOME = (
     f"Vous disposez de <b>{FREE_RESULT_LIMIT} résultats gratuits</b>.\n"
     "Pour un accès illimité, contactez "
     f"<b>{esc(admin_contact())}</b>.\n\n"
-    "Utilisez /me pour consulter votre statut."
+    "Utilisez /me pour consulter votre statut.\n"
+    "Utilisez /notifications pour voir et supprimer vos alertes en attente."
+)
+
+HELP = (
+    "📖 <b>Commandes disponibles</b>\n\n"
+    "/start - Afficher le message d'accueil\n"
+    "/help - Afficher cette liste de commandes\n"
+    "/me - Voir votre statut et quota\n"
+    "/subscription - Alias de /me\n"
+    "/notifications - Voir et supprimer vos alertes en attente\n"
+    "/watchlist - Alias de /notifications\n\n"
+    "<b>Analyse d'une consultation</b>\n"
+    "Envoyez simplement un lien <b>marchespublics.gov.ma</b>, puis choisissez :\n"
+    "• 🏆 Obtenir le gagnant\n"
+    "• 🏙️ Villes des sociétés\n"
+    "• 🔔 Me notifier quand les résultats sont publiés"
+)
+
+ADMIN_HELP = (
+    "<b>Admin</b>\n"
+    "/premium TELEGRAM_ID [years] - Activer Premium\n"
+    "/free TELEGRAM_ID - Revenir au plan Free"
 )
 
 MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
@@ -115,6 +139,10 @@ def is_admin(message):
 
 def fmt_date(dt):
     return dt.strftime("%Y-%m-%d") if dt else "—"
+
+
+def fmt_datetime(dt):
+    return dt.strftime("%Y-%m-%d %H:%M") if dt else "—"
 
 
 def subscription_limit_message():
@@ -199,6 +227,50 @@ def handle_account_command(chat_id, message):
         send(chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}")
 
 
+def help_message(message):
+    if is_admin(message):
+        return HELP + "\n\n" + ADMIN_HELP
+    return HELP
+
+
+def handle_notifications_command(chat_id, message):
+    sender = message.get("from") or {}
+    if not sender.get("id"):
+        send(chat_id, "❌ Impossible d'identifier votre Telegram user id.")
+        return
+    try:
+        user = upsert_telegram_user(sender)
+        watches = list_pending_bid_watches(user.telegram_id)
+    except DatabaseNotConfigured:
+        send(chat_id, database_error_message())
+        return
+    except Exception as exc:
+        log.exception("Notifications command error")
+        send(chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}")
+        return
+
+    if not watches:
+        send(chat_id, "🔕 Vous n'avez aucune notification en attente.")
+        return
+
+    lines = ["🔔 <b>Notifications en attente</b>", ""]
+    keyboard_rows = []
+    for watch in watches:
+        org = f" · org <code>{esc(watch.org_acronyme)}</code>" if watch.org_acronyme else ""
+        lines.append(
+            f"• Consultation <b>{esc(watch.consultation_reference)}</b>{org}"
+            f" · dernier check: <b>{fmt_datetime(watch.last_checked_at)}</b>"
+        )
+        keyboard_rows.append([
+            {
+                "text": f"❌ Supprimer {watch.consultation_reference}",
+                "callback_data": f"unwatch:{watch.id}",
+            }
+        ])
+
+    send(chat_id, "\n".join(lines), reply_markup={"inline_keyboard": keyboard_rows})
+
+
 def extract_url(message):
     text = message.get("text") or message.get("caption") or ""
     for entity in message.get("entities") or []:
@@ -255,6 +327,10 @@ def send_action_choice(chat_id, url):
 
 def build_result(url):
     data = scrape_consultation(url)
+    return build_result_from_data(data)
+
+
+def build_result_from_data(data):
     lots = data.lots or [data]
     if not any(lot.bidders for lot in lots):
         return "❌ Aucune donnée trouvée. Vérifiez que le lien contient les résultats de la consultation."
@@ -358,7 +434,15 @@ def process_update(update):
         handle_account_command(chat_id, message)
         return
 
-    if text.startswith("/start") or text.startswith("/help"):
+    if text.startswith("/notifications") or text.startswith("/watchlist"):
+        handle_notifications_command(chat_id, message)
+        return
+
+    if text.startswith("/help"):
+        send(chat_id, help_message(message))
+        return
+
+    if text.startswith("/start"):
         try:
             upsert_telegram_user(message.get("from") or {"id": chat_id})
         except DatabaseNotConfigured:
@@ -397,6 +481,30 @@ def process_callback(callback):
     if callback_id:
         answer_callback(callback_id, "Traitement en cours...")
     if not chat_id:
+        return
+
+    if data.startswith("unwatch:"):
+        try:
+            watch_id = int(data.split(":", 1)[1])
+        except ValueError:
+            send(chat_id, "❌ Notification inconnue.")
+            return
+        try:
+            user = upsert_telegram_user(sender or {"id": chat_id})
+            watch = stop_bid_watch(user.telegram_id, watch_id)
+            if not watch:
+                send(chat_id, "❌ Notification introuvable ou déjà supprimée.")
+                return
+            send(
+                chat_id,
+                "✅ Notification supprimée pour la consultation "
+                f"<b>{esc(watch.consultation_reference)}</b>.",
+            )
+        except DatabaseNotConfigured:
+            send(chat_id, database_error_message())
+        except Exception as exc:
+            log.exception("Unwatch callback error")
+            send(chat_id, f"❌ <b>Erreur base de données :</b> {esc(str(exc)[:400])}")
         return
 
     parts = data.split(":", 2)

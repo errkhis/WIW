@@ -16,6 +16,7 @@ from database import (
     mark_bid_watch_error,
     mark_bid_watch_notified,
 )
+from api.webhook import build_result_from_data
 from scraper import scrape_consultation
 
 
@@ -53,9 +54,16 @@ def _inside_check_window(now: datetime) -> bool:
     return 8 <= local_now.hour < 19
 
 
-def _has_published_results(data) -> bool:
+def _has_complete_prices(data) -> bool:
     lots = data.lots or [data]
-    return any(lot.bidders for lot in lots)
+    if not lots:
+        return False
+    for lot in lots:
+        if not lot.bidders:
+            return False
+        if any(bidder.price is None for bidder in lot.bidders):
+            return False
+    return True
 
 
 def _notification_keyboard(reference: str, org: str) -> dict:
@@ -67,11 +75,8 @@ def _notification_keyboard(reference: str, org: str) -> dict:
     }
 
 
-def _send_notification(watch) -> None:
-    text = (
-        "🔔 <b>Les résultats commencent à être publiés</b>\n\n"
-        f"Consultation: <b>{_esc(watch.consultation_reference)}</b>"
-    )
+def _send_notification(watch, result_text: str) -> None:
+    text = "🔔 <b>Résultats publiés</b>\n\n" + result_text
     payload = {
         "chat_id": watch.telegram_id,
         "text": text,
@@ -110,9 +115,10 @@ def run_notification_check() -> dict:
     for watch in watches:
         try:
             data = scrape_consultation(watch.consultation_url)
-            if not _has_published_results(data):
+            if not _has_complete_prices(data):
                 continue
-            _send_notification(watch)
+            result_text = build_result_from_data(data)
+            _send_notification(watch, result_text)
             mark_bid_watch_notified(watch.id)
             notified += 1
         except Exception as exc:

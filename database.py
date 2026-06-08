@@ -67,6 +67,8 @@ class BidWatch:
     org_acronyme: str
     consultation_url: str
     status: str
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
     last_checked_at: Optional[datetime]
 
 
@@ -187,6 +189,8 @@ def _row_to_bid_watch(row) -> BidWatch:
         org_acronyme=row["org_acronyme"],
         consultation_url=row["consultation_url"],
         status=row["status"],
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
         last_checked_at=row["last_checked_at"],
     )
 
@@ -237,11 +241,50 @@ def watch_bid_result(
                 notified_at = NULL,
                 last_error = NULL
             RETURNING id, telegram_id, consultation_reference, org_acronyme,
-                consultation_url, status, last_checked_at
+                consultation_url, status, created_at, updated_at,
+                last_checked_at
             """,
             (telegram_id, reference, org_acronyme or "", url),
         ).fetchone()
     return _row_to_bid_watch(row)
+
+
+def list_pending_bid_watches(telegram_id: int) -> list[BidWatch]:
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, telegram_id, consultation_reference, org_acronyme,
+                consultation_url, status, created_at, updated_at,
+                last_checked_at
+            FROM bid_result_watches
+            WHERE telegram_id = %s
+              AND status = 'watching'
+            ORDER BY created_at DESC, id DESC
+            """,
+            (telegram_id,),
+        ).fetchall()
+    return [_row_to_bid_watch(row) for row in rows]
+
+
+def stop_bid_watch(telegram_id: int, watch_id: int) -> Optional[BidWatch]:
+    init_db()
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            UPDATE bid_result_watches
+            SET status = 'stopped',
+                updated_at = NOW()
+            WHERE id = %s
+              AND telegram_id = %s
+              AND status = 'watching'
+            RETURNING id, telegram_id, consultation_reference, org_acronyme,
+                consultation_url, status, created_at, updated_at,
+                last_checked_at
+            """,
+            (watch_id, telegram_id),
+        ).fetchone()
+    return _row_to_bid_watch(row) if row else None
 
 
 def claim_due_bid_watches(limit: int = 10) -> list[BidWatch]:
@@ -271,6 +314,7 @@ def claim_due_bid_watches(limit: int = 10) -> list[BidWatch]:
                 WHERE w.id = due.id
                 RETURNING w.id, w.telegram_id, w.consultation_reference,
                     w.org_acronyme, w.consultation_url, w.status,
+                    w.created_at, w.updated_at,
                     w.last_checked_at
                 """,
                 (limit,),
