@@ -368,6 +368,26 @@ def get_user(telegram_id: int) -> Optional[User]:
     return _row_to_user(row) if row else None
 
 
+def list_telegram_user_ids() -> list[int]:
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT telegram_id
+            FROM users
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+    return [int(row["telegram_id"]) for row in rows]
+
+
+def count_users() -> int:
+    init_db()
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS total FROM users").fetchone()
+    return int(row["total"])
+
+
 def can_create_procurement_result(user: User) -> bool:
     return user.is_premium or user.free_results_used < FREE_RESULT_LIMIT
 

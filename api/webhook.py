@@ -14,7 +14,9 @@ from database import (
     DatabaseNotConfigured,
     QuotaExceeded,
     can_create_procurement_result,
+    count_users,
     grant_premium,
+    list_telegram_user_ids,
     list_pending_bid_watches,
     record_procurement_result,
     set_free,
@@ -124,7 +126,9 @@ HELP = (
 ADMIN_HELP = (
     "<b>Admin</b>\n"
     "/premium TELEGRAM_ID [years] - Activer Premium\n"
-    "/free TELEGRAM_ID - Revenir au plan Free"
+    "/free TELEGRAM_ID - Revenir au plan Free\n"
+    "/users - Voir le nombre d'utilisateurs\n"
+    "/broadcast MESSAGE - Envoyer un message à tous les utilisateurs"
 )
 
 MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
@@ -177,12 +181,78 @@ def database_error_message():
     )
 
 
+def broadcast_to_users(admin_chat_id, text):
+    try:
+        user_ids = list_telegram_user_ids()
+    except DatabaseNotConfigured:
+        send(admin_chat_id, database_error_message())
+        return
+    except Exception as exc:
+        log.exception("Broadcast user load error")
+        send(admin_chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}")
+        return
+
+    if not user_ids:
+        send(admin_chat_id, "Aucun utilisateur enregistré.")
+        return
+
+    send(admin_chat_id, f"📣 Broadcast lancé vers <b>{len(user_ids)}</b> utilisateurs.")
+    sent = 0
+    failed = 0
+    for user_id in user_ids:
+        try:
+            response = http.post(
+                f"{TG}/sendMessage",
+                json={
+                    "chat_id": user_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+                timeout=10,
+            )
+            if response.ok:
+                sent += 1
+            else:
+                failed += 1
+                log.warning("Broadcast failed for %s: %s", user_id, response.text[:300])
+        except Exception:
+            failed += 1
+            log.exception("Broadcast failed for %s", user_id)
+
+    send(
+        admin_chat_id,
+        "✅ Broadcast terminé\n"
+        f"Envoyés : <b>{sent}</b>\n"
+        f"Échecs : <b>{failed}</b>",
+    )
+
+
 def handle_admin_command(chat_id, text, message):
-    if not (text.startswith("/premium") or text.startswith("/free")):
+    admin_commands = ("/premium", "/free", "/users", "/broadcast")
+    if not text.startswith(admin_commands):
         return False
 
     if not is_admin(message):
         send(chat_id, "⛔ Cette commande est réservée à l'administrateur.")
+        return True
+
+    if text.startswith("/users"):
+        try:
+            send(chat_id, f"👥 Utilisateurs enregistrés : <b>{count_users()}</b>")
+        except DatabaseNotConfigured:
+            send(chat_id, database_error_message())
+        except Exception as exc:
+            log.exception("Users command error")
+            send(chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}")
+        return True
+
+    if text.startswith("/broadcast"):
+        broadcast_text = text.removeprefix("/broadcast").strip()
+        if not broadcast_text:
+            send(chat_id, "Format : <code>/broadcast MESSAGE</code>")
+            return True
+        broadcast_to_users(chat_id, broadcast_text)
         return True
 
     parts = text.split()
