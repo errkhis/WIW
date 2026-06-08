@@ -18,6 +18,7 @@ from database import (
     record_procurement_result,
     set_free,
     upsert_telegram_user,
+    watch_bid_result,
 )
 
 from http.server import BaseHTTPRequestHandler
@@ -235,10 +236,15 @@ def send_action_choice(chat_id, url):
         send(chat_id, "❌ Lien invalide : refConsultation est introuvable.")
         return
     keyboard = {
-        "inline_keyboard": [[
-            {"text": "🏆 Obtenir le gagnant", "callback_data": f"winner:{reference}:{org}"},
-            {"text": "🏙️ Villes des sociétés", "callback_data": f"cities:{reference}:{org}"},
-        ]]
+        "inline_keyboard": [
+            [
+                {"text": "🏆 Obtenir le gagnant", "callback_data": f"winner:{reference}:{org}"},
+                {"text": "🏙️ Villes des sociétés", "callback_data": f"cities:{reference}:{org}"},
+            ],
+            [
+                {"text": "🔔 Me notifier quand les résultats sont publiés", "callback_data": f"watch:{reference}:{org}"},
+            ],
+        ]
     }
     send(
         chat_id,
@@ -394,7 +400,7 @@ def process_callback(callback):
         return
 
     parts = data.split(":", 2)
-    if len(parts) != 3 or parts[0] not in ("winner", "cities"):
+    if len(parts) != 3 or parts[0] not in ("winner", "cities", "watch"):
         send(chat_id, "❌ Action inconnue.")
         return
 
@@ -403,6 +409,15 @@ def process_callback(callback):
 
     try:
         user = upsert_telegram_user(sender or {"id": chat_id})
+        if action == "watch":
+            watch_bid_result(user.telegram_id, url, reference, org)
+            send(
+                chat_id,
+                "🔔 Notification activée.\n\n"
+                f"Je vous préviendrai quand les résultats commencent à être publiés "
+                f"pour la consultation <b>{esc(reference)}</b>.",
+            )
+            return
         if not can_create_procurement_result(user):
             send(chat_id, subscription_limit_message())
             return

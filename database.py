@@ -59,6 +59,17 @@ class User:
         return max(FREE_RESULT_LIMIT - self.free_results_used, 0)
 
 
+@dataclass
+class BidWatch:
+    id: int
+    telegram_id: int
+    consultation_reference: str
+    org_acronyme: str
+    consultation_url: str
+    status: str
+    last_checked_at: Optional[datetime]
+
+
 def _database_url() -> str:
     _load_local_env()
     for name in ("DATABASE_URL", "POSTGRES_URL", "SUPABASE_DB_URL"):
@@ -134,6 +145,26 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bid_result_watches (
+                id BIGSERIAL PRIMARY KEY,
+                telegram_id BIGINT NOT NULL REFERENCES users(telegram_id),
+                consultation_reference TEXT NOT NULL,
+                org_acronyme TEXT NOT NULL DEFAULT '',
+                consultation_url TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'watching'
+                    CHECK (status IN ('watching', 'notified', 'stopped')),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_checked_at TIMESTAMPTZ,
+                published_at TIMESTAMPTZ,
+                notified_at TIMESTAMPTZ,
+                last_error TEXT,
+                UNIQUE (telegram_id, consultation_reference, org_acronyme)
+            )
+            """
+        )
     _DB_INITIALIZED = True
 
 
@@ -145,6 +176,18 @@ def _row_to_user(row) -> User:
         plan=row["plan"],
         premium_expires_at=row["premium_expires_at"],
         free_results_used=row["free_results_used"],
+    )
+
+
+def _row_to_bid_watch(row) -> BidWatch:
+    return BidWatch(
+        id=row["id"],
+        telegram_id=row["telegram_id"],
+        consultation_reference=row["consultation_reference"],
+        org_acronyme=row["org_acronyme"],
+        consultation_url=row["consultation_url"],
+        status=row["status"],
+        last_checked_at=row["last_checked_at"],
     )
 
 
@@ -168,6 +211,102 @@ def upsert_telegram_user(tg_user: dict) -> User:
             (telegram_id, username, first_name),
         ).fetchone()
     return _row_to_user(row)
+
+
+def watch_bid_result(
+    telegram_id: int,
+    url: str,
+    reference: str,
+    org_acronyme: str = "",
+) -> BidWatch:
+    init_db()
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO bid_result_watches (
+                telegram_id, consultation_reference, org_acronyme,
+                consultation_url, status
+            )
+            VALUES (%s, %s, %s, %s, 'watching')
+            ON CONFLICT (telegram_id, consultation_reference, org_acronyme)
+            DO UPDATE SET
+                consultation_url = EXCLUDED.consultation_url,
+                status = 'watching',
+                updated_at = NOW(),
+                published_at = NULL,
+                notified_at = NULL,
+                last_error = NULL
+            RETURNING id, telegram_id, consultation_reference, org_acronyme,
+                consultation_url, status, last_checked_at
+            """,
+            (telegram_id, reference, org_acronyme or "", url),
+        ).fetchone()
+    return _row_to_bid_watch(row)
+
+
+def claim_due_bid_watches(limit: int = 10) -> list[BidWatch]:
+    init_db()
+    limit = max(1, min(limit, 50))
+    with _connect() as conn:
+        with conn.transaction():
+            rows = conn.execute(
+                """
+                WITH due AS (
+                    SELECT id
+                    FROM bid_result_watches
+                    WHERE status = 'watching'
+                      AND (
+                        last_checked_at IS NULL
+                        OR last_checked_at < NOW() - INTERVAL '50 seconds'
+                      )
+                    ORDER BY COALESCE(last_checked_at, created_at), id
+                    LIMIT %s
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE bid_result_watches w
+                SET last_checked_at = NOW(),
+                    updated_at = NOW(),
+                    last_error = NULL
+                FROM due
+                WHERE w.id = due.id
+                RETURNING w.id, w.telegram_id, w.consultation_reference,
+                    w.org_acronyme, w.consultation_url, w.status,
+                    w.last_checked_at
+                """,
+                (limit,),
+            ).fetchall()
+    return [_row_to_bid_watch(row) for row in rows]
+
+
+def mark_bid_watch_notified(watch_id: int) -> None:
+    init_db()
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE bid_result_watches
+            SET status = 'notified',
+                published_at = NOW(),
+                notified_at = NOW(),
+                updated_at = NOW(),
+                last_error = NULL
+            WHERE id = %s
+            """,
+            (watch_id,),
+        )
+
+
+def mark_bid_watch_error(watch_id: int, error: str) -> None:
+    init_db()
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE bid_result_watches
+            SET last_error = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (error[:800], watch_id),
+        )
 
 
 def get_user(telegram_id: int) -> Optional[User]:

@@ -3,9 +3,17 @@
     {
       "src": "api/webhook.py",
       "use": "@vercel/python"
+    },
+    {
+      "src": "api/check_notifications.py",
+      "use": "@vercel/python"
     }
   ],
   "routes": [
+    {
+      "src": "/api/check-notifications",
+      "dest": "/api/check_notifications.py"
+    },
     {
       "src": "/api/webhook",
       "dest": "/api/webhook.py"

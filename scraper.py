@@ -354,10 +354,16 @@ def _extract_bidders(soup: BeautifulSoup) -> list[Bidder]:
 
         admin_s = texts[col["admin"]] if col["admin"] < len(texts) else ""
         fin_s = texts[col["fin"]] if col["fin"] < len(texts) else ""
-        price_t = texts[col["price"]] if col["price"] < len(texts) else ""
+        price_before_t = texts[col["price_before"]] if col["price_before"] is not None and col["price_before"] < len(texts) else ""
+        price_after_t = texts[col["price_after"]] if col["price_after"] is not None and col["price_after"] < len(texts) else ""
+        price_t = texts[col["price"]] if col["price"] is not None and col["price"] < len(texts) else ""
         score_t = texts[col["score"]] if col["score"] is not None and col["score"] < len(texts) else ""
 
-        price = _parse_price_fr(price_t)
+        price_after = _parse_price_fr(price_after_t)
+        price_before = _parse_price_fr(price_before_t)
+        price = price_after if price_after is not None else price_before
+        if price is None:
+            price = _parse_price_fr(price_t)
         score = _parse_price_fr(score_t) if score_t else None
 
         bidders.append(
@@ -394,7 +400,15 @@ def _infer_columns(header_row, subheader_row) -> dict:
     """Map column names to indices based on the header rows."""
     # Default layout for marchespublics.gov.ma:
     # 0: Entreprise, 1: Admin, 2: Financial status, 3: Prix avant correction, 4: Prix après correction
-    col = {"name": 0, "admin": 1, "fin": 2, "price": 3, "score": None}
+    col = {
+        "name": 0,
+        "admin": 1,
+        "fin": 2,
+        "price": 3,
+        "price_before": 3,
+        "price_after": 4,
+        "score": None,
+    }
 
     if header_row is None:
         return col
@@ -416,12 +430,18 @@ def _infer_columns(header_row, subheader_row) -> dict:
         elif any(k in hn for k in ["note", "score", "technique"]):
             col["score"] = i
 
-    # Check subheader for price column (often "Avant Correction" is the main price)
+    generic_price_idx = None
     for i, h in enumerate(sub):
         hn = _norm(h)
-        if "avant" in hn or "prix" in hn or "montant" in hn or "offre" in hn:
-            col["price"] = i
-            break
+        if "apres" in hn:
+            col["price_after"] = i
+        elif "avant" in hn:
+            col["price_before"] = i
+        elif "prix" in hn or "montant" in hn or "offre" in hn:
+            generic_price_idx = i
+
+    if generic_price_idx is not None:
+        col["price"] = generic_price_idx
 
     # If price still unset, use col 3 (typical position)
     if col["price"] is None:

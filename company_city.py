@@ -20,6 +20,11 @@ HEADERS = {
     "X-Requested-By": "directinfo-app",
 }
 
+LEGAL_FORM_RE = re.compile(
+    r"\b(sarl\s+au|sarl|ste|societe|société)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class CompanyCity:
@@ -39,7 +44,8 @@ def lookup_company_cities(company_names: list[str]) -> list[CompanyCity]:
 
 
 def _lookup_company_city(client: httpx.Client, name: str) -> CompanyCity:
-    url = f"{DIRECTINFO_SEARCH}/{urllib.parse.quote(name, safe='')}"
+    search_name = _clean_search_name(name)
+    url = f"{DIRECTINFO_SEARCH}/{urllib.parse.quote(search_name, safe='')}"
     try:
         response = client.get(url)
         response.raise_for_status()
@@ -68,6 +74,13 @@ def _best_match(name: str, rows: list[dict]) -> dict:
         if target in denomination or denomination in target:
             return row
     return rows[0]
+
+
+def _clean_search_name(name: str) -> str:
+    text = LEGAL_FORM_RE.sub(" ", name)
+    text = re.sub(r"[^A-Za-zÀ-ÿ0-9]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or name.strip()
 
 
 def _clean_value(value) -> Optional[str]:
