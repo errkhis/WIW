@@ -104,8 +104,7 @@ WELCOME = (
     f"Vous disposez de <b>{FREE_RESULT_LIMIT} résultats gratuits</b>.\n"
     "Pour un accès illimité, contactez "
     f"<b>{esc(admin_contact())}</b>.\n\n"
-    "Utilisez /me pour consulter votre statut.\n"
-    "Utilisez /notifications pour voir et supprimer vos alertes en attente."
+    "Envoyez un lien de consultation ou utilisez les boutons ci-dessous."
 )
 
 HELP = (
@@ -128,10 +127,25 @@ ADMIN_HELP = (
     "/premium TELEGRAM_ID [years] - Activer Premium\n"
     "/free TELEGRAM_ID - Revenir au plan Free\n"
     "/users - Voir le nombre d'utilisateurs\n"
-    "/broadcast MESSAGE - Envoyer un message à tous les utilisateurs"
+    "/broadcast MESSAGE - Envoyer un message à tous les utilisateurs\n"
+    "/setupcommands - Configurer le menu Telegram"
 )
 
 MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+MENU_HOME = "🏠 Menu"
+MENU_ACCOUNT = "👤 Mon compte"
+MENU_NOTIFICATIONS = "🔔 Mes notifications"
+MENU_HELP = "❓ Aide"
+
+MAIN_MENU_MARKUP = {
+    "keyboard": [
+        [MENU_HOME, MENU_ACCOUNT],
+        [MENU_NOTIFICATIONS, MENU_HELP],
+    ],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
 
 
 def is_admin(message):
@@ -178,6 +192,16 @@ def database_error_message():
     return (
         "❌ <b>Base de données non configurée.</b>\n"
         "Ajoutez DATABASE_URL ou POSTGRES_URL dans Vercel."
+    )
+
+
+def send_main_menu(chat_id):
+    send(
+        chat_id,
+        "🏠 <b>Menu principal</b>\n\n"
+        "Envoyez un lien <b>marchespublics.gov.ma</b> pour analyser une consultation, "
+        "ou utilisez les boutons ci-dessous.",
+        reply_markup=MAIN_MENU_MARKUP,
     )
 
 
@@ -228,8 +252,26 @@ def broadcast_to_users(admin_chat_id, text):
     )
 
 
+def setup_public_commands(chat_id):
+    commands = [
+        {"command": "start", "description": "Afficher le menu principal"},
+        {"command": "help", "description": "Voir l'aide"},
+        {"command": "me", "description": "Voir votre compte et quota"},
+        {"command": "notifications", "description": "Gérer vos alertes"},
+    ]
+    try:
+        response = http.post(f"{TG}/setMyCommands", json={"commands": commands}, timeout=10)
+        if response.ok:
+            send(chat_id, "✅ Menu Telegram configuré.")
+        else:
+            send(chat_id, f"❌ Échec setMyCommands : {esc(response.text[:400])}")
+    except Exception as exc:
+        log.exception("setMyCommands error")
+        send(chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}")
+
+
 def handle_admin_command(chat_id, text, message):
-    admin_commands = ("/premium", "/free", "/users", "/broadcast")
+    admin_commands = ("/premium", "/free", "/users", "/broadcast", "/setupcommands")
     if not text.startswith(admin_commands):
         return False
 
@@ -253,6 +295,10 @@ def handle_admin_command(chat_id, text, message):
             send(chat_id, "Format : <code>/broadcast MESSAGE</code>")
             return True
         broadcast_to_users(chat_id, broadcast_text)
+        return True
+
+    if text.startswith("/setupcommands"):
+        setup_public_commands(chat_id)
         return True
 
     parts = text.split()
@@ -508,8 +554,24 @@ def process_update(update):
         handle_notifications_command(chat_id, message)
         return
 
+    if text == MENU_HOME:
+        send_main_menu(chat_id)
+        return
+
+    if text == MENU_ACCOUNT:
+        handle_account_command(chat_id, message)
+        return
+
+    if text == MENU_NOTIFICATIONS:
+        handle_notifications_command(chat_id, message)
+        return
+
+    if text == MENU_HELP:
+        send(chat_id, help_message(message), reply_markup=MAIN_MENU_MARKUP)
+        return
+
     if text.startswith("/help"):
-        send(chat_id, help_message(message))
+        send(chat_id, help_message(message), reply_markup=MAIN_MENU_MARKUP)
         return
 
     if text.startswith("/start"):
@@ -519,13 +581,18 @@ def process_update(update):
             log.warning("DATABASE_URL is not configured")
         except Exception:
             log.exception("Failed to register user")
-        send(chat_id, WELCOME)
+        send(chat_id, WELCOME, reply_markup=MAIN_MENU_MARKUP)
         return
 
     url = extract_url(message)
     if not url:
         if not text.startswith("/"):
-            send(chat_id, "⚠️ Envoyez un lien <b>marchespublics.gov.ma</b>.\n\nUtilisez /help pour voir un exemple.")
+            send(
+                chat_id,
+                "⚠️ Envoyez un lien <b>marchespublics.gov.ma</b> "
+                "ou utilisez les boutons ci-dessous.",
+                reply_markup=MAIN_MENU_MARKUP,
+            )
         return
 
     try:
