@@ -5,7 +5,6 @@ import sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
-from zoneinfo import ZoneInfo
 
 import requests as http
 
@@ -25,7 +24,6 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
-MOROCCO_TZ = ZoneInfo("Africa/Casablanca")
 
 
 def _json_response(handler, status: int, payload: dict) -> None:
@@ -47,11 +45,6 @@ def _is_authorized(path: str) -> bool:
     query = parse_qs(urlparse(path).query)
     provided = (query.get("secret") or [""])[0]
     return provided == secret
-
-
-def _inside_check_window(now: datetime) -> bool:
-    local_now = now.astimezone(MOROCCO_TZ)
-    return 8 <= local_now.hour < 19
 
 
 def _has_complete_prices(data) -> bool:
@@ -96,17 +89,7 @@ def _esc(value) -> str:
 
 
 def run_notification_check() -> dict:
-    now = datetime.now(MOROCCO_TZ)
-    if not _inside_check_window(now):
-        return {
-            "ok": True,
-            "checked": 0,
-            "notified": 0,
-            "errors": 0,
-            "skipped": "outside_check_window",
-            "local_time": now.isoformat(),
-        }
-
+    now = datetime.utcnow()
     limit = int(os.environ.get("NOTIFICATION_CHECK_BATCH_SIZE", "10"))
     watches = claim_due_bid_watches(limit)
     notified = 0
@@ -131,7 +114,7 @@ def run_notification_check() -> dict:
         "checked": len(watches),
         "notified": notified,
         "errors": errors,
-        "local_time": now.isoformat(),
+        "checked_at": now.isoformat() + "Z",
     }
 
 
