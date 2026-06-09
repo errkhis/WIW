@@ -104,7 +104,7 @@ WELCOME = (
     f"Vous disposez de <b>{FREE_RESULT_LIMIT} résultats gratuits</b>.\n"
     "Pour un accès illimité, contactez "
     f"<b>{esc(admin_contact())}</b>.\n\n"
-    "Envoyez un lien de consultation ou utilisez les boutons ci-dessous."
+    "Envoyez un lien de consultation ou utilisez le bouton de commandes Telegram."
 )
 
 HELP = (
@@ -138,14 +138,7 @@ MENU_ACCOUNT = "👤 Mon compte"
 MENU_NOTIFICATIONS = "🔔 Mes notifications"
 MENU_HELP = "❓ Aide"
 
-MAIN_MENU_MARKUP = {
-    "keyboard": [
-        [MENU_HOME, MENU_ACCOUNT],
-        [MENU_NOTIFICATIONS, MENU_HELP],
-    ],
-    "resize_keyboard": True,
-    "is_persistent": True,
-}
+REMOVE_KEYBOARD_MARKUP = {"remove_keyboard": True}
 
 
 def is_admin(message):
@@ -200,8 +193,8 @@ def send_main_menu(chat_id):
         chat_id,
         "🏠 <b>Menu principal</b>\n\n"
         "Envoyez un lien <b>marchespublics.gov.ma</b> pour analyser une consultation, "
-        "ou utilisez les boutons ci-dessous.",
-        reply_markup=MAIN_MENU_MARKUP,
+        "ou utilisez le bouton de commandes Telegram.",
+        reply_markup=REMOVE_KEYBOARD_MARKUP,
     )
 
 
@@ -252,22 +245,29 @@ def broadcast_to_users(admin_chat_id, text):
     )
 
 
-def setup_public_commands(chat_id):
-    commands = [
-        {"command": "start", "description": "Afficher le menu principal"},
+def public_commands():
+    return [
+        {"command": "start", "description": "Afficher l'accueil"},
         {"command": "help", "description": "Voir l'aide"},
         {"command": "me", "description": "Voir votre compte et quota"},
         {"command": "notifications", "description": "Gérer vos alertes"},
     ]
+
+
+def configure_public_commands():
+    return http.post(f"{TG}/setMyCommands", json={"commands": public_commands()}, timeout=10)
+
+
+def setup_public_commands(chat_id):
     try:
-        response = http.post(f"{TG}/setMyCommands", json={"commands": commands}, timeout=10)
+        response = configure_public_commands()
         if response.ok:
-            send(chat_id, "✅ Menu Telegram configuré.")
+            send(chat_id, "✅ Commandes Telegram configurées.", reply_markup=REMOVE_KEYBOARD_MARKUP)
         else:
-            send(chat_id, f"❌ Échec setMyCommands : {esc(response.text[:400])}")
+            send(chat_id, f"❌ Échec setMyCommands : {esc(response.text[:400])}", reply_markup=REMOVE_KEYBOARD_MARKUP)
     except Exception as exc:
         log.exception("setMyCommands error")
-        send(chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}")
+        send(chat_id, f"❌ <b>Erreur :</b> {esc(str(exc)[:400])}", reply_markup=REMOVE_KEYBOARD_MARKUP)
 
 
 def handle_admin_command(chat_id, text, message):
@@ -567,11 +567,11 @@ def process_update(update):
         return
 
     if text == MENU_HELP:
-        send(chat_id, help_message(message), reply_markup=MAIN_MENU_MARKUP)
+        send(chat_id, help_message(message), reply_markup=REMOVE_KEYBOARD_MARKUP)
         return
 
     if text.startswith("/help"):
-        send(chat_id, help_message(message), reply_markup=MAIN_MENU_MARKUP)
+        send(chat_id, help_message(message), reply_markup=REMOVE_KEYBOARD_MARKUP)
         return
 
     if text.startswith("/start"):
@@ -581,7 +581,11 @@ def process_update(update):
             log.warning("DATABASE_URL is not configured")
         except Exception:
             log.exception("Failed to register user")
-        send(chat_id, WELCOME, reply_markup=MAIN_MENU_MARKUP)
+        try:
+            configure_public_commands()
+        except Exception:
+            log.exception("Failed to configure public commands")
+        send(chat_id, WELCOME, reply_markup=REMOVE_KEYBOARD_MARKUP)
         return
 
     url = extract_url(message)
@@ -590,8 +594,8 @@ def process_update(update):
             send(
                 chat_id,
                 "⚠️ Envoyez un lien <b>marchespublics.gov.ma</b> "
-                "ou utilisez les boutons ci-dessous.",
-                reply_markup=MAIN_MENU_MARKUP,
+                "ou utilisez le bouton de commandes Telegram.",
+                reply_markup=REMOVE_KEYBOARD_MARKUP,
             )
         return
 
