@@ -88,24 +88,55 @@ def admin_contact():
 
 # ── Bot content ───────────────────────────────────────────────────────────────
 
-WELCOME = (
-    "🇲🇦 <b>Analyse des appels d'offres publics marocains</b>\n\n"
-    "Envoyez un lien <b>marchespublics.gov.ma</b> et le bot calcule le classement "
-    "par lot avec la méthode du prix de référence.\n\n"
-    "<b>Règles utilisées :</b>\n"
-    "• seules les offres avec prix sont utilisées\n"
-    "• les sociétés sans prix ne sont pas incluses dans les calculs\n"
-    "• aucune exclusion automatique par seuil +20% / -25%\n\n"
-    "<b>Exemple :</b>\n"
-    "<code>https://www.marchespublics.gov.ma/?page=entreprise.SuiviConsultation"
-    "&amp;refConsultation=997895&amp;orgAcronyme=p1v</code>\n\n"
-    "━━━━━━━━━━━━━━\n"
-    "🧾 <b>Plan actuel : Free</b>\n\n"
-    f"Vous disposez de <b>{FREE_RESULT_LIMIT} résultats gratuits</b>.\n"
-    "Pour un accès illimité, contactez "
-    f"<b>{esc(admin_contact())}</b>.\n\n"
-    "Envoyez un lien de consultation ou utilisez le bouton de commandes Telegram."
-)
+def welcome_message(user=None):
+    lines = [
+        "🇲🇦 <b>Analyse des appels d'offres publics marocains</b>",
+        "",
+        "Envoyez un lien <b>marchespublics.gov.ma</b> et le bot calcule le classement "
+        "par lot avec la méthode du prix de référence.",
+        "",
+        "<b>Règles utilisées :</b>",
+        "• seules les offres avec prix sont utilisées",
+        "• les sociétés sans prix ne sont pas incluses dans les calculs",
+        "• aucune exclusion automatique par seuil +20% / -25%",
+        "",
+        "<b>Exemple :</b>",
+        "<code>https://www.marchespublics.gov.ma/?page=entreprise.SuiviConsultation"
+        "&amp;refConsultation=997895&amp;orgAcronyme=p1v</code>",
+        "",
+        "━━━━━━━━━━━━━━",
+    ]
+
+    if user and user.is_premium:
+        lines.extend(
+            [
+                "🧾 <b>Plan actuel : Premium</b>",
+                "",
+                f"Accès illimité jusqu'au <b>{fmt_date(user.premium_expires_at)}</b>.",
+            ]
+        )
+    elif user:
+        lines.extend(
+            [
+                "🧾 <b>Plan actuel : Free</b>",
+                "",
+                f"Utilisés : <b>{user.free_results_used}/{FREE_RESULT_LIMIT}</b>",
+                f"Restants : <b>{user.remaining_free_results}</b>",
+                "Pour un accès illimité, contactez "
+                f"<b>{esc(admin_contact())}</b>.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"Vous disposez de <b>{FREE_RESULT_LIMIT} résultats gratuits</b>.",
+                "Pour un accès illimité, contactez "
+                f"<b>{esc(admin_contact())}</b>.",
+            ]
+        )
+
+    lines.extend(["", "Envoyez un lien de consultation ou utilisez le bouton de commandes Telegram."])
+    return "\n".join(lines)
 
 HELP = (
     "📖 <b>Commandes disponibles</b>\n\n"
@@ -575,8 +606,9 @@ def process_update(update):
         return
 
     if text.startswith("/start"):
+        user = None
         try:
-            upsert_telegram_user(message.get("from") or {"id": chat_id})
+            user = upsert_telegram_user(message.get("from") or {"id": chat_id})
         except DatabaseNotConfigured:
             log.warning("DATABASE_URL is not configured")
         except Exception:
@@ -585,7 +617,7 @@ def process_update(update):
             configure_public_commands()
         except Exception:
             log.exception("Failed to configure public commands")
-        send(chat_id, WELCOME, reply_markup=REMOVE_KEYBOARD_MARKUP)
+        send(chat_id, welcome_message(user), reply_markup=REMOVE_KEYBOARD_MARKUP)
         return
 
     url = extract_url(message)
