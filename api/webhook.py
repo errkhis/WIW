@@ -551,6 +551,11 @@ def _build_lot_result_lines(data, lot_index):
         (avg_price - E) / E * 100
         if avg_price is not None and E else None
     )
+    winner_gap_pct = (
+        (winner.price - ref_price) / ref_price * 100
+        if winner and winner.price is not None and ref_price
+        else None
+    )
 
     lines = []
     lines.append(f"<b>Lot {data.lot_id or lot_index}:</b>")
@@ -559,12 +564,15 @@ def _build_lot_result_lines(data, lot_index):
     lines.append(f"- Offres avec prix utilisées: <b>{len(priced_rankings)}</b>")
     lines.append(f"- E: <b>{fmt(E)}</b>")
     lines.append(f"- Moyenne: <b>{fmt(avg_price)}</b>")
+    lines.append(f"- Prix de référence: <b>{fmt(ref_price)}</b>")
     lines.append(f"- Écart: <b>{fmt_pct(avg_diff_pct)}</b>")
     if len(winners) > 1:
         lines.append(f"- Prix gagnant ex aequo: <b>{fmt(winner.price)}</b>")
+        lines.append(f"- Écart vs prix de référence: <b>{fmt_pct(winner_gap_pct)}</b>")
         lines.append("- Gagnants: <b>" + esc(", ".join(r.name for r in winners)) + "</b>")
     elif winner:
         lines.append(f"- Gagnant: <b>{esc(winner.name)}</b>")
+        lines.append(f"- Écart vs prix de référence: <b>{fmt_pct(winner_gap_pct)}</b>")
     else:
         lines.append("- Gagnant: <b>—</b>")
     lines.append("")
