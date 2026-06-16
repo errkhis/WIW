@@ -408,6 +408,7 @@ def handle_notifications_command(chat_id, message):
             f"• Consultation <b>{esc(watch.consultation_reference)}</b>{org}"
             f" · dernier check: <b>{fmt_datetime(watch.last_checked_at)}</b>"
         )
+        lines.append(f"  Lien: <a href=\"{esc(watch.consultation_url)}\">Ouvrir la consultation</a>")
         keyboard_rows.append([
             {
                 "text": f"❌ Supprimer {watch.consultation_reference}",
