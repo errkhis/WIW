@@ -16,7 +16,7 @@ from database import (
     mark_bid_watch_notified,
 )
 from api.webhook import build_result_from_data
-from scraper import scrape_consultation
+from scraper import _parse_price_fr, scrape_consultation
 
 
 logging.basicConfig(level=logging.INFO)
@@ -54,12 +54,16 @@ def _has_complete_prices(data) -> bool:
     for lot in lots:
         if not lot.bidders:
             return False
-        if any(_is_waiting_for_price(bidder) for bidder in lot.bidders):
+        use_after_prices = any(
+            _parse_price_fr(getattr(bidder, "price_after_raw", "")) is not None
+            for bidder in lot.bidders
+        )
+        if any(_is_waiting_for_price(bidder, use_after_prices) for bidder in lot.bidders):
             return False
     return True
 
 
-def _is_waiting_for_price(bidder) -> bool:
+def _is_waiting_for_price(bidder, use_after_prices: bool) -> bool:
     if bidder.price is not None:
         return False
 
@@ -76,8 +80,9 @@ def _is_waiting_for_price(bidder) -> bool:
     if _is_eliminated_bidder(bidder):
         return False
 
-    # A non-eliminated bidder with "-" is still waiting for prices to publish.
-    return before_clean == "-" or after_clean == "-"
+    # A non-eliminated bidder with "-" in the selected column is still pending.
+    selected = after_clean if use_after_prices else before_clean
+    return selected == "-"
 
 
 def _is_eliminated_bidder(bidder) -> bool:

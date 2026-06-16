@@ -34,6 +34,20 @@ class ConsultationData:
     lots: list["ConsultationData"] = field(default_factory=list)
 
 
+@dataclass
+class _ParsedBidderRow:
+    rank: int
+    name: str
+    admin_status: str
+    financial_status: str
+    price_before_raw: str
+    price_after_raw: str
+    price_before: Optional[float]
+    price_after: Optional[float]
+    generic_price: Optional[float]
+    technical_score: Optional[float]
+
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -339,7 +353,7 @@ def _extract_bidders(soup: BeautifulSoup) -> list[Bidder]:
     subheader_row = rows[header_idx + 1] if header_idx + 1 < len(rows) else None
     col = _infer_columns(rows[header_idx], subheader_row)
 
-    bidders: list[Bidder] = []
+    parsed_rows: list[_ParsedBidderRow] = []
     for idx, row in enumerate(rows[data_start:], start=1):
         cells = row.find_all(["td", "th"])
         if not cells:
@@ -363,22 +377,49 @@ def _extract_bidders(soup: BeautifulSoup) -> list[Bidder]:
 
         price_after = _parse_price_fr(price_after_t)
         price_before = _parse_price_fr(price_before_t)
-        price = price_after if price_after is not None else price_before
-        if price is None:
-            price = _parse_price_fr(price_t)
+        generic_price = _parse_price_fr(price_t)
         score = _parse_price_fr(score_t) if score_t else None
 
-        bidders.append(
-            Bidder(
+        parsed_rows.append(
+            _ParsedBidderRow(
                 rank=idx,
                 name=name,
                 admin_status=admin_s,
                 financial_status=fin_s,
-                price=price,
-                technical_score=score if score and score <= 100 else None,
-                is_eligible=price is not None,
                 price_before_raw=price_before_t,
                 price_after_raw=price_after_t,
+                price_before=price_before,
+                price_after=price_after,
+                generic_price=generic_price,
+                technical_score=score if score and score <= 100 else None,
+            )
+        )
+
+    use_after_prices = any(row.price_after is not None for row in parsed_rows)
+    use_before_prices = not use_after_prices and any(
+        row.price_before is not None for row in parsed_rows
+    )
+
+    bidders: list[Bidder] = []
+    for row in parsed_rows:
+        if use_after_prices:
+            price = row.price_after
+        elif use_before_prices:
+            price = row.price_before
+        else:
+            price = row.generic_price
+
+        bidders.append(
+            Bidder(
+                rank=row.rank,
+                name=row.name,
+                admin_status=row.admin_status,
+                financial_status=row.financial_status,
+                price=price,
+                technical_score=row.technical_score,
+                is_eligible=price is not None,
+                price_before_raw=row.price_before_raw,
+                price_after_raw=row.price_after_raw,
             )
         )
 
