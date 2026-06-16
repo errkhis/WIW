@@ -547,15 +547,6 @@ def _build_lot_result_lines(data, lot_index):
         sum(r.price for r in priced_rankings) / len(priced_rankings)
         if priced_rankings else None
     )
-    avg_diff_pct = (
-        (avg_price - E) / E * 100
-        if avg_price is not None and E else None
-    )
-    winner_gap_pct = (
-        (winner.price - ref_price) / ref_price * 100
-        if winner and winner.price is not None and ref_price
-        else None
-    )
 
     lines = []
     lines.append(f"<b>Lot {data.lot_id or lot_index}:</b>")
@@ -565,14 +556,11 @@ def _build_lot_result_lines(data, lot_index):
     lines.append(f"- E: <b>{fmt(E)}</b>")
     lines.append(f"- Moyenne: <b>{fmt(avg_price)}</b>")
     lines.append(f"- Prix de référence: <b>{fmt(ref_price)}</b>")
-    lines.append(f"- Écart: <b>{fmt_pct(avg_diff_pct)}</b>")
     if len(winners) > 1:
         lines.append(f"- Prix gagnant ex aequo: <b>{fmt(winner.price)}</b>")
-        lines.append(f"- Écart vs prix de référence: <b>{fmt_pct(winner_gap_pct)}</b>")
         lines.append("- Gagnants: <b>" + esc(", ".join(r.name for r in winners)) + "</b>")
     elif winner:
         lines.append(f"- Gagnant: <b>{esc(winner.name)}</b>")
-        lines.append(f"- Écart vs prix de référence: <b>{fmt_pct(winner_gap_pct)}</b>")
     else:
         lines.append("- Gagnant: <b>—</b>")
     lines.append("")
@@ -580,7 +568,12 @@ def _build_lot_result_lines(data, lot_index):
     lines.append("<b>Top 5 des sociétés:</b>")
     for i, r in enumerate(ordered[:5], start=1):
         icon = MEDALS[i - 1] if i <= len(MEDALS) else f"{i}."
-        lines.append(f"{icon} {esc(r.name)} - {fmt(r.price)}")
+        gap_pct = None
+        if ref_price and r.price is not None and r.distance_to_ref is not None:
+            gap_pct = r.distance_to_ref / ref_price * 100
+            if r.side == "below":
+                gap_pct = -gap_pct
+        lines.append(f"{icon} {esc(r.name)} - {fmt(r.price)} ({fmt_pct(gap_pct)})")
     return lines
 
 
