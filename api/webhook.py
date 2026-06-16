@@ -83,67 +83,6 @@ def fmt_pct(n):
     return f"{'+' if n >= 0 else ''}{n:.2f}%"
 
 
-def _company_gap_pct(r, ref_price):
-    if not ref_price or r.price is None or r.distance_to_ref is None:
-        return None
-    gap_pct = r.distance_to_ref / ref_price * 100
-    if r.side == "below":
-        gap_pct = -gap_pct
-    return gap_pct
-
-
-def _display_sort_key(r, ref_price):
-    gap_pct = _company_gap_pct(r, ref_price)
-    if gap_pct is None:
-        return (1, r.price if r.price is not None else float("inf"), r.name.lower())
-    return (
-        0,
-        abs(gap_pct),
-        0 if gap_pct <= 0 else 1,
-        r.price if r.price is not None else float("inf"),
-        r.name.lower(),
-    )
-
-
-def _clip_text(value, width):
-    if len(value) <= width:
-        return value.ljust(width)
-    if width <= 1:
-        return value[:width]
-    return value[: width - 1] + "…"
-
-
-def _build_company_table(ordered, ref_price, winner_names):
-    name_width = 34
-    price_width = 14
-    gap_width = 10
-
-    header = (
-        f"{'G':<2} "
-        f"{'Société':<{name_width}} "
-        f"{'Prix':>{price_width}} "
-        f"{'Écart':>{gap_width}}"
-    )
-    separator = (
-        f"{'-' * 2} "
-        f"{'-' * name_width} "
-        f"{'-' * price_width} "
-        f"{'-' * gap_width}"
-    )
-
-    rows = [header, separator]
-    for r in ordered:
-        gap_pct = _company_gap_pct(r, ref_price)
-        marker = "🏆" if r.name in winner_names else ""
-        rows.append(
-            f"{marker:<2} "
-            f"{_clip_text(r.name, name_width)} "
-            f"{fmt(r.price):>{price_width}} "
-            f"{fmt_pct(gap_pct):>{gap_width}}"
-        )
-    return "<pre>" + esc("\n".join(rows)) + "</pre>"
-
-
 def admin_contact():
     return f"@{TELEGRAM_ADMIN_USERNAME}" if TELEGRAM_ADMIN_USERNAME else "l'administrateur"
 
@@ -223,6 +162,8 @@ ADMIN_HELP = (
     "/broadcast MESSAGE - Envoyer un message à tous les utilisateurs\n"
     "/setupcommands - Configurer le menu Telegram"
 )
+
+MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
 MENU_HOME = "🏠 Menu"
 MENU_ACCOUNT = "👤 Mon compte"
@@ -598,14 +539,9 @@ def _build_lot_result_lines(data, lot_index):
         if r.price is not None and not r.note.startswith("Eliminated")
     ]
     eligible = [r for r in rankings if r.is_eligible]
+    ordered = eligible or priced_rankings
     winner = next((r for r in eligible if r.position == 1), None)
     winners = [r for r in eligible if winner and r.price == winner.price]
-    winner_names = {r.name for r in winners} if winners else set()
-    display_rankings = sorted(
-        priced_rankings,
-        key=lambda r: _display_sort_key(r, ref_price),
-    )
-    unpriced = [r for r in rankings if r.price is None]
     E = data.estimated_price
     avg_price = (
         sum(r.price for r in priced_rankings) / len(priced_rankings)
@@ -629,17 +565,15 @@ def _build_lot_result_lines(data, lot_index):
         lines.append("- Gagnant: <b>—</b>")
     lines.append("")
 
-    lines.append("<b>Sociétés classées:</b>")
-    if display_rankings:
-        lines.append(_build_company_table(display_rankings, ref_price, winner_names))
-    else:
-        lines.append("Aucune société avec prix.")
-
-    if unpriced:
-        lines.append("")
-        lines.append("<b>Sociétés sans prix:</b>")
-        for r in unpriced:
-            lines.append(f"- {esc(r.name)}")
+    lines.append("<b>Top 5 des sociétés:</b>")
+    for i, r in enumerate(ordered[:5], start=1):
+        icon = MEDALS[i - 1] if i <= len(MEDALS) else f"{i}."
+        gap_pct = None
+        if ref_price and r.price is not None and r.distance_to_ref is not None:
+            gap_pct = r.distance_to_ref / ref_price * 100
+            if r.side == "below":
+                gap_pct = -gap_pct
+        lines.append(f"{icon} {esc(r.name)} - {fmt(r.price)} ({fmt_pct(gap_pct)})")
     return lines
 
 
