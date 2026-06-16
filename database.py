@@ -66,6 +66,7 @@ class BidWatch:
     consultation_reference: str
     org_acronyme: str
     consultation_url: str
+    consultation_title: Optional[str]
     status: str
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
@@ -155,6 +156,7 @@ def init_db() -> None:
                 consultation_reference TEXT NOT NULL,
                 org_acronyme TEXT NOT NULL DEFAULT '',
                 consultation_url TEXT NOT NULL,
+                consultation_title TEXT,
                 status TEXT NOT NULL DEFAULT 'watching'
                     CHECK (status IN ('watching', 'notified', 'stopped')),
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -165,6 +167,12 @@ def init_db() -> None:
                 last_error TEXT,
                 UNIQUE (telegram_id, consultation_reference, org_acronyme)
             )
+            """
+        )
+        conn.execute(
+            """
+            ALTER TABLE bid_result_watches
+            ADD COLUMN IF NOT EXISTS consultation_title TEXT
             """
         )
     _DB_INITIALIZED = True
@@ -188,6 +196,7 @@ def _row_to_bid_watch(row) -> BidWatch:
         consultation_reference=row["consultation_reference"],
         org_acronyme=row["org_acronyme"],
         consultation_url=row["consultation_url"],
+        consultation_title=row.get("consultation_title"),
         status=row["status"],
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
@@ -222,6 +231,7 @@ def watch_bid_result(
     url: str,
     reference: str,
     org_acronyme: str = "",
+    consultation_title: Optional[str] = None,
 ) -> BidWatch:
     init_db()
     with _connect() as conn:
@@ -229,22 +239,23 @@ def watch_bid_result(
             """
             INSERT INTO bid_result_watches (
                 telegram_id, consultation_reference, org_acronyme,
-                consultation_url, status
+                consultation_url, consultation_title, status
             )
-            VALUES (%s, %s, %s, %s, 'watching')
+            VALUES (%s, %s, %s, %s, %s, 'watching')
             ON CONFLICT (telegram_id, consultation_reference, org_acronyme)
             DO UPDATE SET
                 consultation_url = EXCLUDED.consultation_url,
+                consultation_title = COALESCE(EXCLUDED.consultation_title, bid_result_watches.consultation_title),
                 status = 'watching',
                 updated_at = NOW(),
                 published_at = NULL,
                 notified_at = NULL,
                 last_error = NULL
             RETURNING id, telegram_id, consultation_reference, org_acronyme,
-                consultation_url, status, created_at, updated_at,
+                consultation_url, consultation_title, status, created_at, updated_at,
                 last_checked_at
             """,
-            (telegram_id, reference, org_acronyme or "", url),
+            (telegram_id, reference, org_acronyme or "", url, consultation_title),
         ).fetchone()
     return _row_to_bid_watch(row)
 
@@ -255,7 +266,7 @@ def list_pending_bid_watches(telegram_id: int) -> list[BidWatch]:
         rows = conn.execute(
             """
             SELECT id, telegram_id, consultation_reference, org_acronyme,
-                consultation_url, status, created_at, updated_at,
+                consultation_url, consultation_title, status, created_at, updated_at,
                 last_checked_at
             FROM bid_result_watches
             WHERE telegram_id = %s
@@ -279,12 +290,26 @@ def stop_bid_watch(telegram_id: int, watch_id: int) -> Optional[BidWatch]:
               AND telegram_id = %s
               AND status = 'watching'
             RETURNING id, telegram_id, consultation_reference, org_acronyme,
-                consultation_url, status, created_at, updated_at,
+                consultation_url, consultation_title, status, created_at, updated_at,
                 last_checked_at
             """,
             (watch_id, telegram_id),
         ).fetchone()
     return _row_to_bid_watch(row) if row else None
+
+
+def update_bid_watch_title(watch_id: int, consultation_title: str) -> None:
+    init_db()
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE bid_result_watches
+            SET consultation_title = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (consultation_title, watch_id),
+        )
 
 
 def claim_due_bid_watches(limit: int = 10) -> list[BidWatch]:

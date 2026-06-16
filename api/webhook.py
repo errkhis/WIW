@@ -21,6 +21,7 @@ from database import (
     record_procurement_result,
     set_free,
     stop_bid_watch,
+    update_bid_watch_title,
     upsert_telegram_user,
     watch_bid_result,
 )
@@ -380,6 +381,23 @@ def help_message(message):
     return HELP
 
 
+def _resolve_watch_title(watch):
+    if watch.consultation_title:
+        return watch.consultation_title
+    try:
+        data = scrape_consultation(watch.consultation_url)
+    except Exception:
+        return watch.consultation_reference
+
+    title = (data.object or "").strip() or watch.consultation_reference
+    try:
+        update_bid_watch_title(watch.id, title)
+        watch.consultation_title = title
+    except Exception:
+        log.exception("Failed to persist watch title for %s", watch.id)
+    return title
+
+
 def handle_notifications_command(chat_id, message):
     sender = message.get("from") or {}
     if not sender.get("id"):
@@ -403,15 +421,13 @@ def handle_notifications_command(chat_id, message):
     lines = ["🔔 <b>Notifications en attente</b>", ""]
     keyboard_rows = []
     for watch in watches:
-        org = f" · org <code>{esc(watch.org_acronyme)}</code>" if watch.org_acronyme else ""
-        lines.append(
-            f"• Consultation <b>{esc(watch.consultation_reference)}</b>{org}"
-            f" · dernier check: <b>{fmt_datetime(watch.last_checked_at)}</b>"
-        )
+        title = _resolve_watch_title(watch)
+        lines.append(f"• <b>{esc(title)}</b>")
         lines.append(f"  Lien: <a href=\"{esc(watch.consultation_url)}\">Ouvrir la consultation</a>")
+        lines.append(f"  Dernier check: <b>{fmt_datetime(watch.last_checked_at)}</b>")
         keyboard_rows.append([
             {
-                "text": f"❌ Supprimer {watch.consultation_reference}",
+                "text": f"❌ Supprimer",
                 "callback_data": f"unwatch:{watch.id}",
             }
         ])
@@ -692,12 +708,17 @@ def process_callback(callback):
     try:
         user = upsert_telegram_user(sender or {"id": chat_id})
         if action == "watch":
-            watch_bid_result(user.telegram_id, url, reference, org)
+            title = None
+            try:
+                title = (scrape_consultation(url).object or "").strip() or None
+            except Exception:
+                log.exception("Failed to fetch consultation title for watch %s", reference)
+            watch_bid_result(user.telegram_id, url, reference, org, title)
             send(
                 chat_id,
                 "🔔 Notification activée.\n\n"
                 f"Je vous préviendrai quand les résultats commencent à être publiés "
-                f"pour la consultation <b>{esc(reference)}</b>.",
+                f"pour la consultation <b>{esc(title or reference)}</b>.",
             )
             return
         if not can_create_procurement_result(user):
