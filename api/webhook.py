@@ -555,14 +555,14 @@ def _build_lot_result_lines(data, lot_index):
     lines.append(f"- Offres avec prix utilisées: <b>{len(priced_rankings)}</b>")
     lines.append(f"- E: <b>{fmt(E)}</b>")
     lines.append(f"- Moyenne: <b>{fmt(avg_price)}</b>")
-    lines.append(f"- Prix de référence: <b>{fmt(ref_price)}</b>")
+    lines.append(f"- 🔴 Prix de référence: <b>{fmt(ref_price)}</b>")
     if len(winners) > 1:
         lines.append(f"- Prix gagnant ex aequo: <b>{fmt(winner.price)}</b>")
         lines.append("- Gagnants: <b>" + esc(", ".join(r.name for r in winners)) + "</b>")
     elif winner:
-        lines.append(f"- Gagnant: <b>{esc(winner.name)}</b>")
+        lines.append(f"- 🟢 Gagnant: <b>{esc(winner.name)}</b>")
     else:
-        lines.append("- Gagnant: <b>—</b>")
+        lines.append("- 🟢 Gagnant: <b>—</b>")
     lines.append("")
 
     lines.append("<b>Top 10 des sociétés:</b>")
