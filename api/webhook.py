@@ -83,6 +83,77 @@ def fmt_pct(n):
     return f"{'+' if n >= 0 else ''}{n:.2f}%"
 
 
+def fmt_signed(n):
+    if n is None:
+        return "—"
+    return f"{'+' if n >= 0 else ''}{n:,.2f}"
+
+
+def _ref_gap_pct(r, ref_price):
+    if not ref_price or r.price is None or r.distance_to_ref is None:
+        return None
+    gap_pct = r.distance_to_ref / ref_price * 100
+    if r.side == "below":
+        gap_pct = -gap_pct
+    return gap_pct
+
+
+def _estimation_gap(r, estimated_price):
+    if estimated_price is None or r.price is None:
+        return None
+    return r.price - estimated_price
+
+
+def _clip_text(value, width):
+    if len(value) <= width:
+        return value.ljust(width)
+    if width <= 1:
+        return value[:width]
+    return value[: width - 1] + "…"
+
+
+def _build_company_table(rows, ref_price, estimated_price, winner_names):
+    name_width = 30
+    amount_width = 15
+    raw_gap_width = 18
+    pct_gap_width = 12
+
+    header = (
+        f"{'Entreprise':<{name_width}} "
+        f"{'Montant (MAD)':>{amount_width}} "
+        f"{'Écart Brut (MAD)':>{raw_gap_width}} "
+        f"{'Écart en %':>{pct_gap_width}}"
+    )
+    separator = (
+        f"{'-' * name_width} "
+        f"{'-' * amount_width} "
+        f"{'-' * raw_gap_width} "
+        f"{'-' * pct_gap_width}"
+    )
+
+    lines = [header, separator]
+    for r in rows:
+        name = r.name
+        amount = fmt(r.price)
+        raw_gap = fmt_signed(_estimation_gap(r, estimated_price))
+        pct_gap = fmt_pct(_ref_gap_pct(r, ref_price))
+        is_winner = r.name in winner_names
+        prefix = "🏆 " if is_winner else ""
+        padded_name = _clip_text(prefix + name, name_width)
+        row = (
+            f"{padded_name} "
+            f"{amount:>{amount_width}} "
+            f"{raw_gap:>{raw_gap_width}} "
+            f"{pct_gap:>{pct_gap_width}}"
+        )
+        if is_winner:
+            row = f"<b>{esc(row)}</b>"
+        else:
+            row = esc(row)
+        lines.append(row)
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
 def admin_contact():
     return f"@{TELEGRAM_ADMIN_USERNAME}" if TELEGRAM_ADMIN_USERNAME else "l'administrateur"
 
@@ -162,8 +233,6 @@ ADMIN_HELP = (
     "/broadcast MESSAGE - Envoyer un message à tous les utilisateurs\n"
     "/setupcommands - Configurer le menu Telegram"
 )
-
-MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
 MENU_HOME = "🏠 Menu"
 MENU_ACCOUNT = "👤 Mon compte"
@@ -539,9 +608,9 @@ def _build_lot_result_lines(data, lot_index):
         if r.price is not None and not r.note.startswith("Eliminated")
     ]
     eligible = [r for r in rankings if r.is_eligible]
-    ordered = eligible or priced_rankings
     winner = next((r for r in eligible if r.position == 1), None)
     winners = [r for r in eligible if winner and r.price == winner.price]
+    winner_names = {r.name for r in winners} if winners else set()
     E = data.estimated_price
     avg_price = (
         sum(r.price for r in priced_rankings) / len(priced_rankings)
@@ -565,15 +634,20 @@ def _build_lot_result_lines(data, lot_index):
         lines.append("- Gagnant: <b>—</b>")
     lines.append("")
 
-    lines.append("<b>Top 5 des sociétés:</b>")
-    for i, r in enumerate(ordered[:5], start=1):
-        icon = MEDALS[i - 1] if i <= len(MEDALS) else f"{i}."
-        gap_pct = None
-        if ref_price and r.price is not None and r.distance_to_ref is not None:
-            gap_pct = r.distance_to_ref / ref_price * 100
-            if r.side == "below":
-                gap_pct = -gap_pct
-        lines.append(f"{icon} {esc(r.name)} - {fmt(r.price)} ({fmt_pct(gap_pct)})")
+    display_rankings = sorted(
+        priced_rankings,
+        key=lambda r: (
+            _ref_gap_pct(r, ref_price) is None,
+            -_ref_gap_pct(r, ref_price) if _ref_gap_pct(r, ref_price) is not None else 0,
+            r.name.lower(),
+        ),
+    )
+
+    lines.append("<b>Sociétés classées:</b>")
+    if display_rankings:
+        lines.append(_build_company_table(display_rankings, ref_price, E, winner_names))
+    else:
+        lines.append("Aucune société avec prix.")
     return lines
 
 
