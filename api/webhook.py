@@ -35,15 +35,20 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
 TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "").strip()
 TELEGRAM_ADMIN_USERNAME = os.environ.get("TELEGRAM_ADMIN_USERNAME", "").strip().lstrip("@")
+TELEGRAM_MESSAGE_LIMIT = 3500
 
 
 # ── Telegram helpers ──────────────────────────────────────────────────────────
 
 def tg(method, payload):
     try:
-        http.post(f"{TG}/{method}", json=payload, timeout=10)
+        response = http.post(f"{TG}/{method}", json=payload, timeout=10)
+        if not response.ok:
+            log.error("Telegram %s failed: %s", method, response.text[:500])
+        return response
     except Exception:
-        pass
+        log.exception("Telegram %s request failed", method)
+        return None
 
 
 def send(chat_id, text, reply_markup=None):
@@ -112,7 +117,7 @@ def _clip_text(value, width):
     return value[: width - 1] + "…"
 
 
-def _build_company_table(rows, ref_price, estimated_price, winner_names):
+def _build_company_table_blocks(rows, ref_price, estimated_price, winner_names):
     name_width = 30
     amount_width = 15
     raw_gap_width = 18
@@ -131,6 +136,7 @@ def _build_company_table(rows, ref_price, estimated_price, winner_names):
         f"{'-' * pct_gap_width}"
     )
 
+    blocks = []
     lines = [header, separator]
     for r in rows:
         name = r.name
@@ -146,8 +152,54 @@ def _build_company_table(rows, ref_price, estimated_price, winner_names):
             f"{raw_gap:>{raw_gap_width}} "
             f"{pct_gap:>{pct_gap_width}}"
         )
-        lines.append(esc(row))
-    return "<pre>" + "\n".join(lines) + "</pre>"
+        escaped_row = esc(row)
+        candidate = "<pre>" + "\n".join(lines + [escaped_row]) + "</pre>"
+        if len(candidate) > TELEGRAM_MESSAGE_LIMIT and len(lines) > 2:
+            blocks.append("<pre>" + "\n".join(lines) + "</pre>")
+            lines = [header, separator, escaped_row]
+        else:
+            lines.append(escaped_row)
+
+    if lines:
+        blocks.append("<pre>" + "\n".join(lines) + "</pre>")
+    return blocks
+
+
+def _compose_message_chunks(blocks, limit=TELEGRAM_MESSAGE_LIMIT):
+    chunks = []
+    current = ""
+
+    for block in blocks:
+        if not current:
+            current = block
+            continue
+
+        candidate = current + "\n" + block
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+
+        chunks.append(current)
+        current = block
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def build_result_messages_from_data(data):
+    lots = data.lots or [data]
+    if not any(lot.bidders for lot in lots):
+        return ["❌ Aucune donnée trouvée. Vérifiez que le lien contient les résultats de la consultation."]
+
+    blocks = [f"Consultation: <b>{esc(data.reference)}</b>"]
+    if len(lots) > 1:
+        blocks.append(f"Cette consultation contient <b>{len(lots)} lots</b>.")
+
+    for lot_index, lot in enumerate(lots, start=1):
+        blocks.extend(_build_lot_result_lines(lot, lot_index))
+
+    return _compose_message_chunks(blocks)
 
 
 def admin_contact():
@@ -560,22 +612,7 @@ def build_result(url):
 
 
 def build_result_from_data(data):
-    lots = data.lots or [data]
-    if not any(lot.bidders for lot in lots):
-        return "❌ Aucune donnée trouvée. Vérifiez que le lien contient les résultats de la consultation."
-
-    lines = []
-    lines.append(f"Consultation: <b>{esc(data.reference)}</b>")
-    lines.append("")
-    if len(lots) > 1:
-        lines.append(f"Cette consultation contient <b>{len(lots)} lots</b>.")
-        lines.append("")
-
-    for lot_index, lot in enumerate(lots, start=1):
-        lines.extend(_build_lot_result_lines(lot, lot_index))
-        lines.append("")
-
-    return "\n".join(lines).strip()
+    return "\n\n".join(build_result_messages_from_data(data)).strip()
 
 
 def build_company_cities_result(url):
@@ -615,7 +652,6 @@ def _build_lot_result_lines(data, lot_index):
 
     lines = []
     lines.append(f"<b>Lot {data.lot_id or lot_index}:</b>")
-    lines.append("")
     lines.append(f"- Sociétés trouvées: <b>{len(data.bidders)}</b>")
     lines.append(f"- Offres avec prix utilisées: <b>{len(priced_rankings)}</b>")
     lines.append(f"- E: <b>{fmt(E)}</b>")
@@ -628,7 +664,6 @@ def _build_lot_result_lines(data, lot_index):
         lines.append(f"- Gagnant: <b>{esc(winner.name)}</b>")
     else:
         lines.append("- Gagnant: <b>—</b>")
-    lines.append("")
 
     display_rankings = sorted(
         priced_rankings,
@@ -641,7 +676,7 @@ def _build_lot_result_lines(data, lot_index):
 
     lines.append("<b>Sociétés classées:</b>")
     if display_rankings:
-        lines.append(_build_company_table(display_rankings, ref_price, E, winner_names))
+        lines.extend(_build_company_table_blocks(display_rankings, ref_price, E, winner_names))
     else:
         lines.append("Aucune société avec prix.")
     return lines
@@ -810,15 +845,19 @@ def process_callback(callback):
         send(chat_id, "⏳ Recherche des villes des sociétés en cours...")
 
     try:
-        result = build_result(url) if action == "winner" else build_company_cities_result(url)
+        if action == "winner":
+            result_messages = build_result_messages_from_data(scrape_consultation(url))
+        else:
+            result_messages = [build_company_cities_result(url)]
         updated_user = record_procurement_result(user.telegram_id, url)
         if not updated_user.is_premium:
-            result += (
+            result_messages[-1] += (
                 "\n\n"
                 f"🧾 Free: {updated_user.free_results_used}/{FREE_RESULT_LIMIT} "
                 f"· restants {updated_user.remaining_free_results}"
             )
-        send(chat_id, result)
+        for result_message in result_messages:
+            send(chat_id, result_message)
     except QuotaExceeded:
         send(chat_id, subscription_limit_message())
     except Exception as exc:
