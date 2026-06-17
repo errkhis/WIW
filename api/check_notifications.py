@@ -15,7 +15,7 @@ from database import (
     mark_bid_watch_error,
     mark_bid_watch_notified,
 )
-from api.webhook import build_result_messages_from_data
+from api.webhook import build_result_from_data
 from scraper import _parse_price_fr, scrape_consultation
 
 
@@ -113,26 +113,20 @@ def _notification_keyboard(reference: str, org: str) -> dict:
     }
 
 
-def _send_notification(watch, result_messages: list[str]) -> None:
-    for index, result_message in enumerate(result_messages):
-        text = result_message
-        if index == 0:
-            text = "🔔 <b>Résultats publiés</b>\n\n" + text
-
-        payload = {
-            "chat_id": watch.telegram_id,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }
-        if index == len(result_messages) - 1:
-            payload["reply_markup"] = _notification_keyboard(
-                watch.consultation_reference,
-                watch.org_acronyme,
-            )
-
-        response = http.post(f"{TG}/sendMessage", json=payload, timeout=10)
-        response.raise_for_status()
+def _send_notification(watch, result_text: str) -> None:
+    text = "🔔 <b>Résultats publiés</b>\n\n" + result_text
+    payload = {
+        "chat_id": watch.telegram_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+        "reply_markup": _notification_keyboard(
+            watch.consultation_reference,
+            watch.org_acronyme,
+        ),
+    }
+    response = http.post(f"{TG}/sendMessage", json=payload, timeout=10)
+    response.raise_for_status()
 
 
 def _esc(value) -> str:
@@ -151,8 +145,8 @@ def run_notification_check() -> dict:
             data = scrape_consultation(watch.consultation_url)
             if not _has_complete_prices(data):
                 continue
-            result_messages = build_result_messages_from_data(data)
-            _send_notification(watch, result_messages)
+            result_text = build_result_from_data(data)
+            _send_notification(watch, result_text)
             mark_bid_watch_notified(watch.id)
             notified += 1
         except Exception as exc:
