@@ -109,14 +109,60 @@ def _estimation_gap(r, estimated_price):
     return r.price - estimated_price
 
 
-def _build_company_line(r, ref_price, estimated_price, winner_names):
-    name = esc(r.name)
-    raw_gap = fmt_signed(_estimation_gap(r, estimated_price))
-    pct_gap = fmt_pct(_ref_gap_pct(r, ref_price))
-    line = f"- {name} | {raw_gap} MAD | {pct_gap}"
-    if r.name in winner_names:
-        return f"🏆 <b>{line}</b>"
-    return line
+def _clip_text(value, width):
+    if len(value) <= width:
+        return value.ljust(width)
+    if width <= 1:
+        return value[:width]
+    return value[: width - 1] + "…"
+
+
+def _build_company_table_blocks(rows, ref_price, estimated_price, winner_names):
+    name_width = 30
+    amount_width = 15
+    raw_gap_width = 18
+    pct_gap_width = 12
+
+    header = (
+        f"{'Entreprise':<{name_width}} "
+        f"{'Montant (MAD)':>{amount_width}} "
+        f"{'Écart Brut (MAD)':>{raw_gap_width}} "
+        f"{'Écart en %':>{pct_gap_width}}"
+    )
+    separator = (
+        f"{'-' * name_width} "
+        f"{'-' * amount_width} "
+        f"{'-' * raw_gap_width} "
+        f"{'-' * pct_gap_width}"
+    )
+
+    blocks = []
+    lines = [header, separator]
+    for r in rows:
+        name = r.name
+        amount = fmt(r.price)
+        raw_gap = fmt_signed(_estimation_gap(r, estimated_price))
+        pct_gap = fmt_pct(_ref_gap_pct(r, ref_price))
+        is_winner = r.name in winner_names
+        prefix = "🏆 " if is_winner else ""
+        padded_name = _clip_text(prefix + name, name_width)
+        row = (
+            f"{padded_name} "
+            f"{amount:>{amount_width}} "
+            f"{raw_gap:>{raw_gap_width}} "
+            f"{pct_gap:>{pct_gap_width}}"
+        )
+        escaped_row = esc(row)
+        candidate = "<pre>" + "\n".join(lines + [escaped_row]) + "</pre>"
+        if len(candidate) > TELEGRAM_MESSAGE_LIMIT and len(lines) > 2:
+            blocks.append("<pre>" + "\n".join(lines) + "</pre>")
+            lines = [header, separator, escaped_row]
+        else:
+            lines.append(escaped_row)
+
+    if lines:
+        blocks.append("<pre>" + "\n".join(lines) + "</pre>")
+    return blocks
 
 
 def _compose_message_chunks(blocks, limit=TELEGRAM_MESSAGE_LIMIT):
@@ -619,42 +665,18 @@ def _build_lot_result_lines(data, lot_index):
     else:
         lines.append("- Gagnant: <b>—</b>")
 
+    display_rankings = sorted(
+        priced_rankings,
+        key=lambda r: (
+            _ref_gap_pct(r, ref_price) is None,
+            -_ref_gap_pct(r, ref_price) if _ref_gap_pct(r, ref_price) is not None else 0,
+            r.name.lower(),
+        ),
+    )
+
     lines.append("<b>Sociétés classées:</b>")
-    if priced_rankings:
-        if ref_price is None:
-            fallback_rows = sorted(
-                priced_rankings,
-                key=lambda r: (r.price, r.name.lower()),
-            )[:20]
-            for r in fallback_rows:
-                lines.append(_build_company_line(r, ref_price, E, winner_names))
-        else:
-            above_ref = [
-                r for r in priced_rankings
-                if r.price is not None and r.price > ref_price
-            ]
-            below_ref = [
-                r for r in priced_rankings
-                if r.price is not None and r.price <= ref_price
-            ]
-
-            above_ref.sort(key=lambda r: (r.price - ref_price, r.name.lower()))
-            below_ref.sort(key=lambda r: (ref_price - r.price, r.name.lower()))
-
-            above_slice = above_ref[:10]
-            below_slice = below_ref[:10]
-
-            if above_slice:
-                lines.append("<b>10 au-dessus du prix de référence:</b>")
-                for r in above_slice:
-                    lines.append(_build_company_line(r, ref_price, E, winner_names))
-
-            if below_slice:
-                if above_slice:
-                    lines.append("")
-                lines.append("<b>10 en dessous du prix de référence:</b>")
-                for r in below_slice:
-                    lines.append(_build_company_line(r, ref_price, E, winner_names))
+    if display_rankings:
+        lines.extend(_build_company_table_blocks(display_rankings, ref_price, E, winner_names))
     else:
         lines.append("Aucune société avec prix.")
     return lines
