@@ -565,14 +565,12 @@ def _build_lot_result_lines(data, lot_index):
         lines.append("- Gagnant: <b>—</b>")
     lines.append("")
 
-    lines.append("<b>Top 5 des sociétés:</b>")
-    for i, r in enumerate(ordered[:5], start=1):
+    lines.append("<b>Top 10 des sociétés:</b>")
+    for i, r in enumerate(ordered[:10], start=1):
         icon = MEDALS[i - 1] if i <= len(MEDALS) else f"{i}."
         gap_pct = None
-        if ref_price and r.price is not None and r.distance_to_ref is not None:
-            gap_pct = r.distance_to_ref / ref_price * 100
-            if r.side == "below":
-                gap_pct = -gap_pct
+        if E and r.price is not None:
+            gap_pct = (r.price - E) / E * 100
         lines.append(f"{icon} {esc(r.name)} - {fmt(r.price)} ({fmt_pct(gap_pct)})")
     return lines
 
