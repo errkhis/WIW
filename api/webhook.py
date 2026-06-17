@@ -146,11 +146,7 @@ def _build_company_table(rows, ref_price, estimated_price, winner_names):
             f"{raw_gap:>{raw_gap_width}} "
             f"{pct_gap:>{pct_gap_width}}"
         )
-        if is_winner:
-            row = f"<b>{esc(row)}</b>"
-        else:
-            row = esc(row)
-        lines.append(row)
+        lines.append(esc(row))
     return "<pre>" + "\n".join(lines) + "</pre>"
 
 
