@@ -572,18 +572,6 @@ def _build_lot_result_lines(data, lot_index):
         if E and r.price is not None:
             gap_pct = (r.price - E) / E * 100
         lines.append(f"{icon} {esc(r.name)} - {fmt(r.price)} ({fmt_pct(gap_pct)})")
-    lines.append("")
-    lines.append("<b>Écart vs estimation:</b>")
-    if E is None:
-        lines.append("- ❌ Écart impossible à calculer: prix estimatif introuvable.")
-        return lines
-    if not ordered:
-        lines.append("- ❌ Aucun prix exploitable pour calculer l'écart.")
-        return lines
-    for i, r in enumerate(ordered, start=1):
-        icon = MEDALS[i - 1] if i <= len(MEDALS) else f"{i}."
-        gap_pct = (r.price - E) / E * 100 if r.price is not None else None
-        lines.append(f"{icon} {esc(r.name)} - {fmt(r.price)} ({fmt_pct(gap_pct)})")
     return lines
 
 
