@@ -20,6 +20,7 @@ from database import (
     list_pending_bid_watches,
     record_procurement_result,
     set_free,
+    set_daily_summary_enabled,
     stop_bid_watch,
     update_bid_watch_title,
     upsert_telegram_user,
@@ -151,7 +152,9 @@ HELP = (
     "Envoyez simplement un lien <b>marchespublics.gov.ma</b>, puis choisissez :\n"
     "• 🏆 Obtenir le gagnant\n"
     "• 🏙️ Villes des sociétés\n"
-    "• 🔔 Me notifier quand les résultats sont publiés"
+    "• 🔔 Me notifier quand les résultats sont publiés\n\n"
+    "<b>Premium</b>\n"
+    "Activez le résumé quotidien des appels d'offres simplifiés depuis /me."
 )
 
 ADMIN_HELP = (
@@ -199,18 +202,37 @@ def subscription_limit_message():
 
 def account_status_message(user):
     if user.is_premium:
+        daily_status = "activé" if user.daily_summary_enabled else "désactivé"
         return (
             "👤 <b>Votre compte</b>\n"
             "Plan : <b>Premium</b>\n"
             f"Valide jusqu'au : <b>{fmt_date(user.premium_expires_at)}</b>\n"
-            "Résultats : <b>illimités</b>"
+            "Résultats : <b>illimités</b>\n"
+            f"Résumé quotidien : <b>{daily_status}</b>"
         )
     return (
         "👤 <b>Votre compte</b>\n"
         "Plan : <b>Free</b>\n"
         f"Utilisés : <b>{user.free_results_used}/{FREE_RESULT_LIMIT}</b>\n"
-        f"Restants : <b>{user.remaining_free_results}</b>"
+        f"Restants : <b>{user.remaining_free_results}</b>\n"
+        "Résumé quotidien : <b>Premium uniquement</b>"
     )
+
+
+def account_reply_markup(user):
+    if not user.is_premium:
+        return None
+    if user.daily_summary_enabled:
+        button = {
+            "text": "Désactiver le résumé quotidien",
+            "callback_data": "daily_summary:off",
+        }
+    else:
+        button = {
+            "text": "Activer le résumé quotidien",
+            "callback_data": "daily_summary:on",
+        }
+    return {"inline_keyboard": [[button]]}
 
 
 def database_error_message():
@@ -367,7 +389,7 @@ def handle_account_command(chat_id, message):
         return
     try:
         user = upsert_telegram_user(sender)
-        send(chat_id, account_status_message(user))
+        send(chat_id, account_status_message(user), reply_markup=account_reply_markup(user))
     except DatabaseNotConfigured:
         send(chat_id, database_error_message())
     except Exception as exc:
@@ -693,6 +715,27 @@ def process_callback(callback):
             send(chat_id, database_error_message())
         except Exception as exc:
             log.exception("Unwatch callback error")
+            send(chat_id, f"❌ <b>Erreur base de données :</b> {esc(str(exc)[:400])}")
+        return
+
+    if data in ("daily_summary:on", "daily_summary:off"):
+        enabled = data.endswith(":on")
+        try:
+            user = upsert_telegram_user(sender or {"id": chat_id})
+            if not user.is_premium:
+                send(chat_id, "🔒 Le résumé quotidien est réservé aux utilisateurs Premium.")
+                return
+            user = set_daily_summary_enabled(user.telegram_id, enabled)
+            status = "activé" if user.daily_summary_enabled else "désactivé"
+            send(
+                chat_id,
+                f"✅ Résumé quotidien <b>{status}</b>.",
+                reply_markup=account_reply_markup(user),
+            )
+        except DatabaseNotConfigured:
+            send(chat_id, database_error_message())
+        except Exception as exc:
+            log.exception("Daily summary toggle error")
             send(chat_id, f"❌ <b>Erreur base de données :</b> {esc(str(exc)[:400])}")
         return
 

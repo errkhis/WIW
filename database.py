@@ -45,6 +45,7 @@ class User:
     plan: str
     premium_expires_at: Optional[datetime]
     free_results_used: int
+    daily_summary_enabled: bool = False
 
     @property
     def is_premium(self) -> bool:
@@ -133,6 +134,7 @@ def init_db() -> None:
                 premium_expires_at TIMESTAMPTZ,
                 free_results_used INTEGER NOT NULL DEFAULT 0
                     CHECK (free_results_used >= 0),
+                daily_summary_enabled BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
@@ -171,6 +173,27 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS daily_summary_runs (
+                summary_date DATE PRIMARY KEY,
+                status TEXT NOT NULL
+                    CHECK (status IN ('running', 'sent', 'error')),
+                recipient_count INTEGER NOT NULL DEFAULT 0,
+                sent_count INTEGER NOT NULL DEFAULT 0,
+                error_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
+            ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS daily_summary_enabled BOOLEAN NOT NULL DEFAULT FALSE
+            """
+        )
+        conn.execute(
+            """
             ALTER TABLE bid_result_watches
             ADD COLUMN IF NOT EXISTS consultation_title TEXT
             """
@@ -186,6 +209,7 @@ def _row_to_user(row) -> User:
         plan=row["plan"],
         premium_expires_at=row["premium_expires_at"],
         free_results_used=row["free_results_used"],
+        daily_summary_enabled=bool(row.get("daily_summary_enabled", False)),
     )
 
 
@@ -219,7 +243,7 @@ def upsert_telegram_user(tg_user: dict) -> User:
                 first_name = EXCLUDED.first_name,
                 updated_at = NOW()
             RETURNING telegram_id, username, first_name, plan,
-                premium_expires_at, free_results_used
+                premium_expires_at, free_results_used, daily_summary_enabled
             """,
             (telegram_id, username, first_name),
         ).fetchone()
@@ -384,7 +408,7 @@ def get_user(telegram_id: int) -> Optional[User]:
         row = conn.execute(
             """
             SELECT telegram_id, username, first_name, plan,
-                premium_expires_at, free_results_used
+                premium_expires_at, free_results_used, daily_summary_enabled
             FROM users
             WHERE telegram_id = %s
             """,
@@ -400,6 +424,23 @@ def list_telegram_user_ids() -> list[int]:
             """
             SELECT telegram_id
             FROM users
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+    return [int(row["telegram_id"]) for row in rows]
+
+
+def list_daily_summary_recipients() -> list[int]:
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT telegram_id
+            FROM users
+            WHERE daily_summary_enabled = TRUE
+              AND plan = 'premium'
+              AND premium_expires_at IS NOT NULL
+              AND premium_expires_at > NOW()
             ORDER BY created_at DESC
             """
         ).fetchall()
@@ -442,7 +483,7 @@ def record_procurement_result(telegram_id: int, url: str) -> User:
                     OR free_results_used < %s
                   )
                 RETURNING telegram_id, username, first_name, plan,
-                    premium_expires_at, free_results_used
+                    premium_expires_at, free_results_used, daily_summary_enabled
                 """,
                 (telegram_id, FREE_RESULT_LIMIT),
             ).fetchone()
@@ -476,7 +517,7 @@ def grant_premium(telegram_id: int, years: int = PREMIUM_YEARS_DEFAULT) -> User:
                 END,
                 updated_at = NOW()
             RETURNING telegram_id, username, first_name, plan,
-                premium_expires_at, free_results_used
+                premium_expires_at, free_results_used, daily_summary_enabled
             """,
             (telegram_id, years, years, years),
         ).fetchone()
@@ -495,8 +536,85 @@ def set_free(telegram_id: int) -> User:
                 premium_expires_at = NULL,
                 updated_at = NOW()
             RETURNING telegram_id, username, first_name, plan,
-                premium_expires_at, free_results_used
+                premium_expires_at, free_results_used, daily_summary_enabled
             """,
             (telegram_id,),
         ).fetchone()
     return _row_to_user(row)
+
+
+def set_daily_summary_enabled(telegram_id: int, enabled: bool) -> User:
+    init_db()
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            UPDATE users
+            SET daily_summary_enabled = %s,
+                updated_at = NOW()
+            WHERE telegram_id = %s
+            RETURNING telegram_id, username, first_name, plan,
+                premium_expires_at, free_results_used, daily_summary_enabled
+            """,
+            (enabled, telegram_id),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Telegram user not found")
+    return _row_to_user(row)
+
+
+def claim_daily_summary_run(summary_date) -> bool:
+    init_db()
+    with _connect() as conn:
+        with conn.transaction():
+            row = conn.execute(
+                """
+                INSERT INTO daily_summary_runs (summary_date, status)
+                VALUES (%s, 'running')
+                ON CONFLICT (summary_date) DO UPDATE SET
+                    status = 'running',
+                    updated_at = NOW(),
+                    last_error = NULL
+                WHERE daily_summary_runs.status = 'error'
+                   OR (
+                        daily_summary_runs.status = 'running'
+                        AND daily_summary_runs.updated_at < NOW() - INTERVAL '2 hours'
+                   )
+                RETURNING summary_date
+                """,
+                (summary_date,),
+            ).fetchone()
+    return row is not None
+
+
+def finish_daily_summary_run(
+    summary_date,
+    status: str,
+    recipient_count: int,
+    sent_count: int,
+    error_count: int,
+    last_error: Optional[str] = None,
+) -> None:
+    init_db()
+    if status not in ("sent", "error"):
+        raise ValueError("status must be 'sent' or 'error'")
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE daily_summary_runs
+            SET status = %s,
+                recipient_count = %s,
+                sent_count = %s,
+                error_count = %s,
+                last_error = %s,
+                updated_at = NOW()
+            WHERE summary_date = %s
+            """,
+            (
+                status,
+                recipient_count,
+                sent_count,
+                error_count,
+                last_error[:800] if last_error else None,
+                summary_date,
+            ),
+        )
