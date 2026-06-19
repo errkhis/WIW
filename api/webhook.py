@@ -150,6 +150,7 @@ HELP = (
     "<b>Analyse d'une consultation</b>\n"
     "Envoyez simplement un lien <b>marchespublics.gov.ma</b>, puis choisissez :\n"
     "• 🏆 Obtenir le gagnant\n"
+    "• 📏 Écart vs estimation\n"
     "• 🏙️ Villes des sociétés\n"
     "• 🔔 Me notifier quand les résultats sont publiés"
 )
@@ -475,6 +476,9 @@ def send_action_choice(chat_id, url):
         "inline_keyboard": [
             [
                 {"text": "🏆 Obtenir le gagnant", "callback_data": f"winner:{reference}:{org}"},
+                {"text": "📏 Écart vs estimation", "callback_data": f"distance:{reference}:{org}"},
+            ],
+            [
                 {"text": "🏙️ Villes des sociétés", "callback_data": f"cities:{reference}:{org}"},
             ],
             [
@@ -532,6 +536,28 @@ def build_company_cities_result(url):
     return "\n".join(lines)
 
 
+def build_distance_result(url):
+    data = scrape_consultation(url)
+    return build_distance_result_from_data(data)
+
+
+def build_distance_result_from_data(data):
+    lots = data.lots or [data]
+    if not any(lot.bidders for lot in lots):
+        return "❌ Aucune donnée trouvée. Vérifiez que le lien contient les résultats de la consultation."
+
+    lines = [f"Consultation: <b>{esc(data.reference)}</b>", ""]
+    if len(lots) > 1:
+        lines.append(f"Cette consultation contient <b>{len(lots)} lots</b>.")
+        lines.append("")
+
+    for lot_index, lot in enumerate(lots, start=1):
+        lines.extend(_build_lot_distance_lines(lot, lot_index))
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
 def _build_lot_result_lines(data, lot_index):
     rankings, _, ref_price = calculate_winners(data)
     priced_rankings = [
@@ -572,6 +598,32 @@ def _build_lot_result_lines(data, lot_index):
         if E and r.price is not None:
             gap_pct = (r.price - E) / E * 100
         lines.append(f"{icon} {esc(r.name)} - {fmt(r.price)} ({fmt_pct(gap_pct)})")
+    return lines
+
+
+def _build_lot_distance_lines(data, lot_index):
+    priced_bidders = [bidder for bidder in data.bidders if bidder.price is not None]
+
+    lines = [f"<b>Lot {data.lot_id or lot_index}:</b>", ""]
+    if data.estimated_price is None:
+        lines.append("- E: <b>—</b>")
+        lines.append("- ❌ Écart impossible à calculer: prix estimatif introuvable.")
+        return lines
+
+    lines.append(f"- E: <b>{fmt(data.estimated_price)}</b>")
+    lines.append(f"- Sociétés avec prix utilisées: <b>{len(priced_bidders)}</b>")
+    if not priced_bidders:
+        lines.append("- ❌ Aucun prix exploitable pour calculer l'écart.")
+        return lines
+
+    lines.append("")
+    lines.append("<b>Écart vs estimation:</b>")
+    for i, bidder in enumerate(priced_bidders, start=1):
+        icon = MEDALS[i - 1] if i <= len(MEDALS) else f"{i}."
+        gap_pct = (bidder.price - data.estimated_price) / data.estimated_price * 100
+        lines.append(
+            f"{icon} {esc(bidder.name)} - {fmt(bidder.price)} ({fmt_pct(gap_pct)})"
+        )
     return lines
 
 
@@ -697,7 +749,7 @@ def process_callback(callback):
         return
 
     parts = data.split(":", 2)
-    if len(parts) != 3 or parts[0] not in ("winner", "cities", "watch"):
+    if len(parts) != 3 or parts[0] not in ("winner", "distance", "cities", "watch"):
         send(chat_id, "❌ Action inconnue.")
         return
 
@@ -734,11 +786,18 @@ def process_callback(callback):
     typing(chat_id)
     if action == "winner":
         send(chat_id, "⏳ Calcul du gagnant en cours...")
+    elif action == "distance":
+        send(chat_id, "⏳ Calcul de l'écart vs estimation en cours...")
     else:
         send(chat_id, "⏳ Recherche des villes des sociétés en cours...")
 
     try:
-        result = build_result(url) if action == "winner" else build_company_cities_result(url)
+        if action == "winner":
+            result = build_result(url)
+        elif action == "distance":
+            result = build_distance_result(url)
+        else:
+            result = build_company_cities_result(url)
         updated_user = record_procurement_result(user.telegram_id, url)
         if not updated_user.is_premium:
             result += (
