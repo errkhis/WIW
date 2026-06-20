@@ -4,20 +4,6 @@
       "maxDuration": 300
     }
   },
-  "builds": [
-    {
-      "src": "api/webhook.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "api/check_notifications.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "api/daily_summary.py",
-      "use": "@vercel/python"
-    }
-  ],
   "routes": [
     {
       "src": "/api/check-notifications",
