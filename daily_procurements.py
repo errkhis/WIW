@@ -13,10 +13,18 @@ from scraper import HEADERS, _parse_price_fr
 
 BASE_URL = "https://www.marchespublics.gov.ma"
 LIST_URL = f"{BASE_URL}/index.php?page=entreprise.EntrepriseAdvancedSearch&AllCons"
+SEARCH_URL = f"{BASE_URL}/index.php?page=entreprise.EntrepriseAdvancedSearch&searchAnnCons"
+ANNOUNCEMENT_TYPE_SELECT = "ctl0$CONTENU_PAGE$AdvancedSearch$annonceType"
+PROCEDURE_TYPE_SELECT = "ctl0$CONTENU_PAGE$AdvancedSearch$procedureType"
+PUBLISHED_DATE_START = "ctl0$CONTENU_PAGE$AdvancedSearch$dateMiseEnLigneCalculeStart"
+PUBLISHED_DATE_END = "ctl0$CONTENU_PAGE$AdvancedSearch$dateMiseEnLigneCalculeEnd"
+SEARCH_BUTTON = "ctl0$CONTENU_PAGE$AdvancedSearch$lancerRecherche"
 PAGE_SIZE_SELECT = "ctl0$CONTENU_PAGE$resultSearch$listePageSizeTop"
 PAGE_SIZE_SELECT_BOTTOM = "ctl0$CONTENU_PAGE$resultSearch$listePageSizeBottom"
 TELEGRAM_MESSAGE_LIMIT = 3900
 SIMPLIFIED_OPEN_TENDER_LABEL = "Appel d'offres ouvert simplifié"
+CONSULTATION_ANNOUNCEMENT_VALUE = "3"
+SIMPLIFIED_OPEN_TENDER_VALUE = "50"
 
 
 @dataclass(frozen=True)
@@ -34,7 +42,7 @@ def fetch_daily_procurements(target_date: date) -> list[ProcurementSummaryItem]:
     target = target_date.strftime("%d/%m/%Y")
     with http.Session() as session:
         session.headers.update(HEADERS)
-        html = _fetch_500_row_listing(session)
+        html = _fetch_simplified_open_tender_listing(session, target)
         items = _parse_listing_items(html, target)
 
     return _with_estimated_prices(items)
@@ -82,22 +90,48 @@ def build_daily_summary_messages(
     return messages
 
 
-def _fetch_500_row_listing(session: http.Session) -> str:
+def _fetch_simplified_open_tender_listing(session: http.Session, published_date: str) -> str:
     session.headers.update(HEADERS)
-    response = session.get(LIST_URL, timeout=30)
+    response = session.get(SEARCH_URL, timeout=30)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "lxml")
     form = soup.find("form")
     if not form:
-        raise ValueError("Search result form not found")
+        raise ValueError("Advanced search form not found")
 
     data = _form_data(form)
+    data[ANNOUNCEMENT_TYPE_SELECT] = CONSULTATION_ANNOUNCEMENT_VALUE
+    data[PROCEDURE_TYPE_SELECT] = SIMPLIFIED_OPEN_TENDER_VALUE
+    data[PUBLISHED_DATE_START] = published_date
+    data[PUBLISHED_DATE_END] = published_date
+    data[SEARCH_BUTTON] = "Lancer la recherche"
+    data["PRADO_POSTBACK_TARGET"] = SEARCH_BUTTON
+    data["PRADO_POSTBACK_PARAMETER"] = ""
+
+    action_url = urljoin(SEARCH_URL, form.get("action") or SEARCH_URL)
+    response = session.post(action_url, data=data, timeout=45)
+    response.raise_for_status()
+    return _set_page_size_500(session, response.text, response.url)
+
+
+def _set_page_size_500(session: http.Session, html: str, page_url: str) -> str:
+    soup = BeautifulSoup(html, "lxml")
+    if not soup.find("table", class_="table-results"):
+        return html
+    form = soup.find("form")
+    if not form:
+        return html
+
+    data = _form_data(form)
+    if PAGE_SIZE_SELECT not in data:
+        return html
+
     data[PAGE_SIZE_SELECT] = "500"
     data[PAGE_SIZE_SELECT_BOTTOM] = "500"
     data["PRADO_POSTBACK_TARGET"] = PAGE_SIZE_SELECT
     data["PRADO_POSTBACK_PARAMETER"] = ""
 
-    action_url = urljoin(LIST_URL, form.get("action") or LIST_URL)
+    action_url = urljoin(page_url, form.get("action") or page_url)
     response = session.post(action_url, data=data, timeout=45)
     response.raise_for_status()
     return response.text
@@ -147,10 +181,9 @@ def _parse_listing_row(row, published_date: str) -> Optional[ProcurementSummaryI
     procedure = meta_text.split(" ... ", 1)[0].strip()
     dates = re.findall(r"\d{2}/\d{2}/\d{4}", meta_text)
     row_published_date = dates[-1] if dates else ""
-    # The portal shows this mode as AOO plus the "Marché Public Simplifié" marker.
-    if procedure != "AOO" or row_published_date != published_date:
+    if row_published_date != published_date:
         return None
-    if not _has_simplified_marker(row):
+    if procedure and procedure != "AOO":
         return None
 
     consultation_url = _detail_url(row)
@@ -172,15 +205,6 @@ def _parse_listing_row(row, published_date: str) -> Optional[ProcurementSummaryI
         published_date=row_published_date,
         consultation_url=consultation_url,
     )
-
-
-def _has_simplified_marker(row) -> bool:
-    for img in row.find_all("img"):
-        marker_text = f"{img.get('src', '')} {img.get('alt', '')} {img.get('title', '')}"
-        if "logo-mps-small" in marker_text or "Marché Public Simplifié" in marker_text:
-            return True
-    return False
-
 
 def _detail_url(row) -> str:
     for link in row.find_all("a", href=True):
