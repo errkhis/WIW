@@ -407,16 +407,10 @@ def build_daily_summary_message(
             "Aucune consultation publiée hier."
         )
 
-    locations = len({item.location for item in items if item.location and item.location != "—"})
-    total_estimation = sum(item.estimated_price or 0 for item in items)
-    latest_due_date = min((item.due_date for item in items if item.due_date != "—"), default="—")
     return (
         "📋 <b>Résumé quotidien - Appels d'offres ouverts simplifiés</b>\n\n"
         f"Publié le: <b>{date_label}</b>\n"
         f"Total: <b>{len(items)} consultations</b>\n"
-        f"Lieux couverts: <b>{locations}</b>\n"
-        f"Estimation cumulée: <b>{_fmt_price(total_estimation)}</b>\n"
-        f"Prochaine date limite: <b>{_esc(latest_due_date)}</b>\n\n"
         "Le détail complet est joint en fichier HTML."
     )
 
@@ -628,15 +622,10 @@ def _reference_from_text(text: str) -> str:
 
 
 def _title_from_text(text: str) -> str:
-    match = re.search(r"Objet\s*:\s*(.*?)\s+Acheteur public\s*:", text, re.I)
+    match = re.search(r"Objet\s*:\s*(.*)", text, re.I)
     if not match:
-        return text
-    title = match.group(1).strip()
-    if " ... " in title:
-        title = title.split(" ... ")[-1].strip()
-    title = re.sub(r"^[A-Za-z0-9./_-]+\s*-\s*", "", title).strip()
-    title = re.sub(r"^\s*Objet\s*:\s*", "", title, flags=re.I).strip()
-    return title
+        return text.strip()
+    return match.group(1).strip()
 
 
 def _location_from_text(text: str) -> str:
