@@ -2,6 +2,9 @@ import json
 import logging
 import os
 import sys
+import threading
+import uuid
+from io import BytesIO
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -10,7 +13,11 @@ from zoneinfo import ZoneInfo
 import requests as http
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from daily_procurements import build_daily_summary_messages, fetch_daily_procurements
+from daily_procurements import (
+    build_daily_summary_html_document,
+    build_daily_summary_message,
+    fetch_daily_procurements,
+)
 from database import (
     DatabaseNotConfigured,
     list_daily_summary_recipients,
@@ -70,6 +77,29 @@ def _send_message(chat_id: int, text: str) -> None:
     response.raise_for_status()
 
 
+def _send_document(chat_id: int, filename: str, content: str) -> None:
+    payload = {
+        "chat_id": str(chat_id),
+        "caption": "Fichier HTML du résumé quotidien.",
+        "parse_mode": "HTML",
+        "disable_content_type_detection": "true",
+    }
+    files = {
+        "document": (
+            filename,
+            BytesIO(content.encode("utf-8")),
+            "text/html; charset=utf-8",
+        )
+    }
+    response = http.post(
+        f"{TG}/sendDocument",
+        data=payload,
+        files=files,
+        timeout=30,
+    )
+    response.raise_for_status()
+
+
 def run_daily_summary(summary_date: date) -> dict:
     recipients = list_daily_summary_recipients()
     recipient_count = len(recipients)
@@ -88,12 +118,14 @@ def run_daily_summary(summary_date: date) -> dict:
     error_count = 0
     last_error = None
     items = fetch_daily_procurements(summary_date)
-    messages = build_daily_summary_messages(items, summary_date)
+    summary_message = build_daily_summary_message(items, summary_date)
+    html_document = build_daily_summary_html_document(items, summary_date)
+    filename = f"resume-aos-{summary_date.isoformat()}.html"
 
     for telegram_id in recipients:
         try:
-            for message in messages:
-                _send_message(telegram_id, message)
+            _send_message(telegram_id, summary_message)
+            _send_document(telegram_id, filename, html_document)
             sent_count += 1
         except Exception as exc:
             error_count += 1
@@ -111,6 +143,28 @@ def run_daily_summary(summary_date: date) -> dict:
     }
 
 
+def _run_daily_summary_job(job_id: str, summary_date: date) -> None:
+    try:
+        result = run_daily_summary(summary_date)
+        log.info("Daily summary job %s finished: %s", job_id, result)
+    except DatabaseNotConfigured:
+        log.exception("Daily summary job %s failed: database_not_configured", job_id)
+    except Exception:
+        log.exception("Daily summary job %s failed", job_id)
+
+
+def _start_daily_summary_job(summary_date: date) -> str:
+    job_id = uuid.uuid4().hex[:12]
+    thread = threading.Thread(
+        target=_run_daily_summary_job,
+        args=(job_id, summary_date),
+        daemon=True,
+        name=f"daily-summary-{job_id}",
+    )
+    thread.start()
+    return job_id
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not _is_authorized(self.path):
@@ -118,11 +172,20 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            _json_response(self, 200, run_daily_summary(_summary_date(self.path)))
+            summary_date = _summary_date(self.path)
+            job_id = _start_daily_summary_job(summary_date)
+            _json_response(
+                self,
+                202,
+                {
+                    "ok": True,
+                    "queued": True,
+                    "job_id": job_id,
+                    "summary_date": summary_date.isoformat(),
+                },
+            )
         except ValueError as exc:
             _json_response(self, 400, {"ok": False, "error": str(exc)})
-        except DatabaseNotConfigured:
-            _json_response(self, 500, {"ok": False, "error": "database_not_configured"})
         except Exception as exc:
             log.exception("Daily summary endpoint error")
             _json_response(self, 500, {"ok": False, "error": str(exc)[:400]})
