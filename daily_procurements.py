@@ -424,17 +424,18 @@ def build_daily_summary_html_document(
     date_label = target_date.strftime("%d/%m/%Y")
     rows = []
     for index, item in enumerate(items, start=1):
+        row_class = "row-fournitures" if _norm(item.category).startswith("fourniture") else ""
         rows.append(
-            "<tr>"
-            f"<td>{index}</td>"
-            f"<td>{_html(item.title)}</td>"
-            f"<td>{_html(item.category)}</td>"
-            f"<td>{_html(_fmt_price(item.estimated_price))}</td>"
-            f"<td>{_html(_fmt_price(item.caution_amount))}</td>"
-            f"<td>{_html(_yes_no(item.has_documents))}</td>"
-            f"<td>{_html(item.location)}</td>"
-            f"<td>{_html(item.due_date)}</td>"
-            f"<td><a href=\"{_html(item.consultation_url)}\">Consultation</a></td>"
+            f"<tr class=\"{row_class}\">"
+            f"<td data-label=\"#\">{index}</td>"
+            f"<td data-label=\"OBJET\">{_html(item.title)}</td>"
+            f"<td data-label=\"TYPE\">{_html(item.category)}</td>"
+            f"<td data-label=\"ESTIMATION\">{_html(_fmt_price(item.estimated_price))}</td>"
+            f"<td data-label=\"CAUTION\">{_html(_fmt_price(item.caution_amount))}</td>"
+            f"<td data-label=\"DOCUMENTS\">{_html(_yes_no(item.has_documents))}</td>"
+            f"<td data-label=\"LIEU\">{_html(item.location)}</td>"
+            f"<td data-label=\"DATE LIMITE\">{_html(item.due_date)}</td>"
+            f"<td data-label=\"LIEN\"><a href=\"{_html(item.consultation_url)}\">Consultation</a></td>"
             "</tr>"
         )
 
@@ -457,6 +458,7 @@ def build_daily_summary_html_document(
       --line: #d7d0c2;
       --accent: #0d5c63;
       --accent-soft: #e1f0ef;
+      --fournitures: #fff2c7;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -512,6 +514,9 @@ def build_daily_summary_html_document(
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }}
+    tbody tr.row-fournitures td {{
+      background: var(--fournitures);
+    }}
     td:nth-child(1), td:nth-child(4), td:nth-child(6) {{
       white-space: nowrap;
     }}
@@ -522,7 +527,30 @@ def build_daily_summary_html_document(
     @media (max-width: 720px) {{
       body {{ padding: 12px; }}
       header {{ padding: 20px; }}
-      th, td {{ padding: 10px; }}
+      .table-wrap {{ overflow: visible; padding: 12px; }}
+      table, thead, tbody, tr, th, td {{ display: block; width: 100%; }}
+      thead {{ display: none; }}
+      tr {{
+        margin-bottom: 12px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        overflow: hidden;
+        background: #fffdf8;
+      }}
+      td {{
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        white-space: normal !important;
+      }}
+      td:last-child {{ border-bottom: 0; }}
+      td::before {{
+        content: attr(data-label);
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.04em;
+      }}
     }}
   </style>
 </head>

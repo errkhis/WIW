@@ -97,6 +97,13 @@ module.exports = async (req, res) => {
         if (marker === -1) return text;
         return clean(text.slice(marker + 'objet :'.length));
       };
+      const extractCategory = (metaParts) => {
+        const value = clean(metaParts[1] || '');
+        return value.replace(/\d{2}\/\d{2}\/\d{4}.*/, '').trim() || '—';
+      };
+      const extractLocation = (value) => {
+        return clean(value).replace(/^\-\s*/, '') || '—';
+      };
 
       return rows.slice(2).map((row) => {
         const cells = Array.from(row.querySelectorAll('td'));
@@ -121,8 +128,8 @@ module.exports = async (req, res) => {
         return {
           reference,
           title,
-          category: metaParts[1] || '—',
-          location: locationText || '—',
+          category: extractCategory(metaParts),
+          location: extractLocation(locationText),
           due_date: dueMatch ? dueMatch[0] : '—',
           published_date: pickDate(metaText),
           consultation_url: href,
