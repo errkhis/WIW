@@ -458,8 +458,8 @@ def build_daily_summary_html_document(
       --line: #d7d0c2;
       --accent: #0d5c63;
       --accent-soft: #e1f0ef;
-      --fournitures: #ffd966;
-      --fournitures-border: #c58a00;
+      --fournitures: #ffd9d9;
+      --fournitures-border: #c62828;
     }}
     * {{ box-sizing: border-box; }}
     body {{
