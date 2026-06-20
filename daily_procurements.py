@@ -35,6 +35,7 @@ SIMPLIFIED_OPEN_TENDER_VALUE = "50"
 class ProcurementSummaryItem:
     reference: str
     title: str
+    category: str
     estimated_price: Optional[float]
     caution_amount: Optional[float]
     has_documents: bool
@@ -84,6 +85,7 @@ def _fetch_listing_items_via_browser_api(
         ProcurementSummaryItem(
             reference=str(item.get("reference") or "").strip(),
             title=str(item.get("title") or "").strip(),
+            category=str(item.get("category") or "—").strip() or "—",
             estimated_price=None,
             caution_amount=None,
             has_documents=False,
@@ -426,6 +428,7 @@ def build_daily_summary_html_document(
             "<tr>"
             f"<td>{index}</td>"
             f"<td>{_html(item.title)}</td>"
+            f"<td>{_html(item.category)}</td>"
             f"<td>{_html(_fmt_price(item.estimated_price))}</td>"
             f"<td>{_html(_fmt_price(item.caution_amount))}</td>"
             f"<td>{_html(_yes_no(item.has_documents))}</td>"
@@ -436,7 +439,7 @@ def build_daily_summary_html_document(
         )
 
     table_rows = "\n".join(rows) or (
-        "<tr><td colspan=\"8\">Aucune consultation publiee pour cette date.</td></tr>"
+        "<tr><td colspan=\"9\">Aucune consultation publiee pour cette date.</td></tr>"
     )
     return f"""<!doctype html>
 <html lang="fr">
@@ -462,6 +465,7 @@ def build_daily_summary_html_document(
       background: linear-gradient(180deg, var(--bg), #ebe4d7);
       color: var(--ink);
       font: 14px/1.5 Arial, sans-serif;
+      text-transform: uppercase;
     }}
     .sheet {{
       max-width: 1400px;
@@ -535,6 +539,7 @@ def build_daily_summary_html_document(
           <tr>
             <th>#</th>
             <th>Objet</th>
+            <th>Type</th>
             <th>Estimation</th>
             <th>Caution</th>
             <th>Documents</th>
@@ -575,6 +580,8 @@ def _parse_listing_row(row, published_date: str) -> Optional[ProcurementSummaryI
 
     meta_text = _clean(cells[1].get_text(" ", strip=True))
     procedure = meta_text.split(" ... ", 1)[0].strip()
+    meta_parts = [part.strip() for part in meta_text.split(" ... ") if part.strip()]
+    category = meta_parts[1] if len(meta_parts) > 1 else "—"
     dates = re.findall(r"\d{2}/\d{2}/\d{4}", meta_text)
     row_published_date = dates[-1] if dates else ""
     if row_published_date != published_date:
@@ -595,6 +602,7 @@ def _parse_listing_row(row, published_date: str) -> Optional[ProcurementSummaryI
     return ProcurementSummaryItem(
         reference=reference,
         title=title,
+        category=category,
         estimated_price=None,
         caution_amount=None,
         has_documents=False,

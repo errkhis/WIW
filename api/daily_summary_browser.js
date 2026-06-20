@@ -103,6 +103,7 @@ module.exports = async (req, res) => {
         if (cells.length < 5) return null;
 
         const metaText = clean(cells[1]?.innerText || '');
+        const metaParts = metaText.split('...').map((part) => clean(part)).filter(Boolean);
         const detailText = clean(cells[2]?.innerText || '');
         const locationText = clean(cells[3]?.innerText || '');
         const dueText = clean(cells[4]?.innerText || '');
@@ -120,6 +121,7 @@ module.exports = async (req, res) => {
         return {
           reference,
           title,
+          category: metaParts[1] || '—',
           location: locationText || '—',
           due_date: dueMatch ? dueMatch[0] : '—',
           published_date: pickDate(metaText),
