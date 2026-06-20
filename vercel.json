@@ -3,19 +3,5 @@
     "api/*.py": {
       "maxDuration": 300
     }
-  },
-  "routes": [
-    {
-      "src": "/api/check-notifications",
-      "dest": "/api/check_notifications.py"
-    },
-    {
-      "src": "/api/daily-summary",
-      "dest": "/api/daily_summary.py"
-    },
-    {
-      "src": "/api/webhook",
-      "dest": "/api/webhook.py"
-    }
-  ]
+  }
 }
