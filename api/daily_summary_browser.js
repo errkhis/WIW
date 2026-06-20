@@ -38,6 +38,13 @@ function clean(value) {
   return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function extractTitle(detailText) {
+  const text = clean(detailText);
+  const marker = text.toLowerCase().indexOf('objet :');
+  if (marker === -1) return text;
+  return clean(text.slice(marker + 'objet :'.length));
+}
+
 module.exports = async (req, res) => {
   if (!authorized(req)) {
     return res.status(401).json({ ok: false, error: 'unauthorized' });
@@ -106,8 +113,7 @@ module.exports = async (req, res) => {
         const dueText = clean(cells[4]?.innerText || '');
         const link = row.querySelector('a[href*="EntrepriseDetailConsultation"]');
         const href = link ? new URL(link.getAttribute('href'), baseUrl).toString() : '';
-        const titleMatch = detailText.match(/Objet\\s*:\\s*(.*?)\\s+Acheteur public\\s*:/i);
-        const title = clean(titleMatch ? titleMatch[1] : detailText);
+        const title = extractTitle(detailText);
         const reference = (() => {
           try {
             return new URL(href).searchParams.get('refConsultation') || '';
