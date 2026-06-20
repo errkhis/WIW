@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/daily_summary.py": {
+    "api/*.py": {
       "maxDuration": 300
     }
   },
