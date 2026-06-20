@@ -586,6 +586,18 @@ def claim_daily_summary_run(summary_date) -> bool:
     return row is not None
 
 
+def reset_daily_summary_run(summary_date) -> None:
+    init_db()
+    with _connect() as conn:
+        conn.execute(
+            """
+            DELETE FROM daily_summary_runs
+            WHERE summary_date = %s
+            """,
+            (summary_date,),
+        )
+
+
 def finish_daily_summary_run(
     summary_date,
     status: str,

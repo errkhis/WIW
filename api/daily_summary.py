@@ -16,6 +16,7 @@ from database import (
     claim_daily_summary_run,
     finish_daily_summary_run,
     list_daily_summary_recipients,
+    reset_daily_summary_run,
 )
 
 
@@ -58,6 +59,11 @@ def _summary_date(path: str) -> date:
     return datetime.now(CASABLANCA_TZ).date() - timedelta(days=1)
 
 
+def _force_run(path: str) -> bool:
+    value = (_query(path).get("force") or [""])[0].strip().lower()
+    return value in ("1", "true", "yes")
+
+
 def _send_message(chat_id: int, text: str) -> None:
     response = http.post(
         f"{TG}/sendMessage",
@@ -72,33 +78,38 @@ def _send_message(chat_id: int, text: str) -> None:
     response.raise_for_status()
 
 
-def run_daily_summary(summary_date: date) -> dict:
+def run_daily_summary(summary_date: date, force: bool = False) -> dict:
+    recipients = list_daily_summary_recipients()
+    recipient_count = len(recipients)
+    if not recipients:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "no_enabled_premium_recipients",
+            "summary_date": summary_date.isoformat(),
+            "recipients": 0,
+            "sent": 0,
+            "errors": 0,
+        }
+
+    if force:
+        reset_daily_summary_run(summary_date)
+
     if not claim_daily_summary_run(summary_date):
         return {
             "ok": True,
             "skipped": True,
             "reason": "already_running_or_sent",
             "summary_date": summary_date.isoformat(),
+            "recipients": recipient_count,
+            "sent": 0,
+            "errors": 0,
         }
 
-    recipient_count = 0
     sent_count = 0
     error_count = 0
     last_error = None
     try:
-        recipients = list_daily_summary_recipients()
-        recipient_count = len(recipients)
-        if not recipients:
-            finish_daily_summary_run(summary_date, "sent", 0, 0, 0)
-            return {
-                "ok": True,
-                "summary_date": summary_date.isoformat(),
-                "items": 0,
-                "recipients": 0,
-                "sent": 0,
-                "errors": 0,
-            }
-
         items = fetch_daily_procurements(summary_date)
         messages = build_daily_summary_messages(items, summary_date)
 
@@ -147,7 +158,11 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            _json_response(self, 200, run_daily_summary(_summary_date(self.path)))
+            _json_response(
+                self,
+                200,
+                run_daily_summary(_summary_date(self.path), _force_run(self.path)),
+            )
         except ValueError as exc:
             _json_response(self, 400, {"ok": False, "error": str(exc)})
         except DatabaseNotConfigured:
