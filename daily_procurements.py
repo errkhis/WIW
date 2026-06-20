@@ -431,7 +431,6 @@ def build_daily_summary_html_document(
         rows.append(
             "<tr>"
             f"<td>{index}</td>"
-            f"<td>{_html(item.reference)}</td>"
             f"<td>{_html(item.title)}</td>"
             f"<td>{_html(_fmt_price(item.estimated_price))}</td>"
             f"<td>{_html(_fmt_price(item.caution_amount))}</td>"
@@ -443,7 +442,7 @@ def build_daily_summary_html_document(
         )
 
     table_rows = "\n".join(rows) or (
-        "<tr><td colspan=\"9\">Aucune consultation publiee pour cette date.</td></tr>"
+        "<tr><td colspan=\"8\">Aucune consultation publiee pour cette date.</td></tr>"
     )
     return f"""<!doctype html>
 <html lang="fr">
@@ -541,7 +540,6 @@ def build_daily_summary_html_document(
         <thead>
           <tr>
             <th>#</th>
-            <th>Reference</th>
             <th>Objet</th>
             <th>Estimation</th>
             <th>Caution</th>
@@ -636,6 +634,8 @@ def _title_from_text(text: str) -> str:
     title = match.group(1).strip()
     if " ... " in title:
         title = title.split(" ... ")[-1].strip()
+    title = re.sub(r"^[A-Za-z0-9./_-]+\s*-\s*", "", title).strip()
+    title = re.sub(r"^\s*Objet\s*:\s*", "", title, flags=re.I).strip()
     return title
 
 
