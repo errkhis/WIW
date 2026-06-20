@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/daily_summary.py": {
+      "maxDuration": 300
+    }
+  },
   "builds": [
     {
       "src": "api/webhook.py",

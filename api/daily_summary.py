@@ -63,6 +63,16 @@ def _summary_date(path: str) -> date:
     return datetime.now(CASABLANCA_TZ).date() - timedelta(days=1)
 
 
+def _background_requested(path: str) -> bool:
+    requested = (_query(path).get("background") or [""])[0].strip().lower()
+    if requested in {"1", "true", "yes", "on"}:
+        return True
+    if requested in {"0", "false", "no", "off"}:
+        return False
+    default_flag = os.environ.get("DAILY_SUMMARY_BACKGROUND", "").strip().lower()
+    return default_flag in {"1", "true", "yes", "on"}
+
+
 def _send_message(chat_id: int, text: str) -> None:
     response = http.post(
         f"{TG}/sendMessage",
@@ -173,19 +183,24 @@ class handler(BaseHTTPRequestHandler):
 
         try:
             summary_date = _summary_date(self.path)
-            job_id = _start_daily_summary_job(summary_date)
-            _json_response(
-                self,
-                202,
-                {
-                    "ok": True,
-                    "queued": True,
-                    "job_id": job_id,
-                    "summary_date": summary_date.isoformat(),
-                },
-            )
+            if _background_requested(self.path):
+                job_id = _start_daily_summary_job(summary_date)
+                _json_response(
+                    self,
+                    202,
+                    {
+                        "ok": True,
+                        "queued": True,
+                        "job_id": job_id,
+                        "summary_date": summary_date.isoformat(),
+                    },
+                )
+            else:
+                _json_response(self, 200, run_daily_summary(summary_date))
         except ValueError as exc:
             _json_response(self, 400, {"ok": False, "error": str(exc)})
+        except DatabaseNotConfigured:
+            _json_response(self, 500, {"ok": False, "error": "database_not_configured"})
         except Exception as exc:
             log.exception("Daily summary endpoint error")
             _json_response(self, 500, {"ok": False, "error": str(exc)[:400]})
