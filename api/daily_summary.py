@@ -2,8 +2,6 @@ import json
 import logging
 import os
 import sys
-import threading
-import uuid
 from io import BytesIO
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler
@@ -61,16 +59,6 @@ def _summary_date(path: str) -> date:
     if requested:
         return datetime.strptime(requested, "%Y-%m-%d").date()
     return datetime.now(CASABLANCA_TZ).date() - timedelta(days=1)
-
-
-def _background_requested(path: str) -> bool:
-    requested = (_query(path).get("background") or [""])[0].strip().lower()
-    if requested in {"1", "true", "yes", "on"}:
-        return True
-    if requested in {"0", "false", "no", "off"}:
-        return False
-    default_flag = os.environ.get("DAILY_SUMMARY_BACKGROUND", "").strip().lower()
-    return default_flag in {"1", "true", "yes", "on"}
 
 
 def _send_message(chat_id: int, text: str) -> None:
@@ -151,30 +139,6 @@ def run_daily_summary(summary_date: date) -> dict:
         "errors": error_count,
         "last_error": last_error,
     }
-
-
-def _run_daily_summary_job(job_id: str, summary_date: date) -> None:
-    try:
-        result = run_daily_summary(summary_date)
-        log.info("Daily summary job %s finished: %s", job_id, result)
-    except DatabaseNotConfigured:
-        log.exception("Daily summary job %s failed: database_not_configured", job_id)
-    except Exception:
-        log.exception("Daily summary job %s failed", job_id)
-
-
-def _start_daily_summary_job(summary_date: date) -> str:
-    job_id = uuid.uuid4().hex[:12]
-    thread = threading.Thread(
-        target=_run_daily_summary_job,
-        args=(job_id, summary_date),
-        daemon=True,
-        name=f"daily-summary-{job_id}",
-    )
-    thread.start()
-    return job_id
-
-
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not _is_authorized(self.path):
@@ -183,20 +147,7 @@ class handler(BaseHTTPRequestHandler):
 
         try:
             summary_date = _summary_date(self.path)
-            if _background_requested(self.path):
-                job_id = _start_daily_summary_job(summary_date)
-                _json_response(
-                    self,
-                    202,
-                    {
-                        "ok": True,
-                        "queued": True,
-                        "job_id": job_id,
-                        "summary_date": summary_date.isoformat(),
-                    },
-                )
-            else:
-                _json_response(self, 200, run_daily_summary(summary_date))
+            _json_response(self, 200, run_daily_summary(summary_date))
         except ValueError as exc:
             _json_response(self, 400, {"ok": False, "error": str(exc)})
         except DatabaseNotConfigured:
