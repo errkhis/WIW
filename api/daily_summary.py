@@ -13,10 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from daily_procurements import build_daily_summary_messages, fetch_daily_procurements
 from database import (
     DatabaseNotConfigured,
-    claim_daily_summary_run,
-    finish_daily_summary_run,
     list_daily_summary_recipients,
-    reset_daily_summary_run,
 )
 
 
@@ -59,11 +56,6 @@ def _summary_date(path: str) -> date:
     return datetime.now(CASABLANCA_TZ).date() - timedelta(days=1)
 
 
-def _force_run(path: str) -> bool:
-    value = (_query(path).get("force") or [""])[0].strip().lower()
-    return value in ("1", "true", "yes")
-
-
 def _send_message(chat_id: int, text: str) -> None:
     response = http.post(
         f"{TG}/sendMessage",
@@ -78,7 +70,7 @@ def _send_message(chat_id: int, text: str) -> None:
     response.raise_for_status()
 
 
-def run_daily_summary(summary_date: date, force: bool = False) -> dict:
+def run_daily_summary(summary_date: date) -> dict:
     recipients = list_daily_summary_recipients()
     recipient_count = len(recipients)
     if not recipients:
@@ -92,63 +84,31 @@ def run_daily_summary(summary_date: date, force: bool = False) -> dict:
             "errors": 0,
         }
 
-    if force:
-        reset_daily_summary_run(summary_date)
-
-    if not claim_daily_summary_run(summary_date):
-        return {
-            "ok": True,
-            "skipped": True,
-            "reason": "already_running_or_sent",
-            "summary_date": summary_date.isoformat(),
-            "recipients": recipient_count,
-            "sent": 0,
-            "errors": 0,
-        }
-
     sent_count = 0
     error_count = 0
     last_error = None
-    try:
-        items = fetch_daily_procurements(summary_date)
-        messages = build_daily_summary_messages(items, summary_date)
+    items = fetch_daily_procurements(summary_date)
+    messages = build_daily_summary_messages(items, summary_date)
 
-        for telegram_id in recipients:
-            try:
-                for message in messages:
-                    _send_message(telegram_id, message)
-                sent_count += 1
-            except Exception as exc:
-                error_count += 1
-                last_error = str(exc)
-                log.exception("Daily summary send failed for %s", telegram_id)
+    for telegram_id in recipients:
+        try:
+            for message in messages:
+                _send_message(telegram_id, message)
+            sent_count += 1
+        except Exception as exc:
+            error_count += 1
+            last_error = str(exc)
+            log.exception("Daily summary send failed for %s", telegram_id)
 
-        finish_daily_summary_run(
-            summary_date,
-            "sent",
-            recipient_count,
-            sent_count,
-            error_count,
-            last_error,
-        )
-        return {
-            "ok": True,
-            "summary_date": summary_date.isoformat(),
-            "items": len(items),
-            "recipients": recipient_count,
-            "sent": sent_count,
-            "errors": error_count,
-        }
-    except Exception as exc:
-        finish_daily_summary_run(
-            summary_date,
-            "error",
-            recipient_count,
-            sent_count,
-            error_count + 1,
-            str(exc),
-        )
-        raise
+    return {
+        "ok": error_count == 0,
+        "summary_date": summary_date.isoformat(),
+        "items": len(items),
+        "recipients": recipient_count,
+        "sent": sent_count,
+        "errors": error_count,
+        "last_error": last_error,
+    }
 
 
 class handler(BaseHTTPRequestHandler):
@@ -158,11 +118,7 @@ class handler(BaseHTTPRequestHandler):
             return
 
         try:
-            _json_response(
-                self,
-                200,
-                run_daily_summary(_summary_date(self.path), _force_run(self.path)),
-            )
+            _json_response(self, 200, run_daily_summary(_summary_date(self.path)))
         except ValueError as exc:
             _json_response(self, 400, {"ok": False, "error": str(exc)})
         except DatabaseNotConfigured:

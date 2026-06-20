@@ -173,21 +173,6 @@ def init_db() -> None:
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS daily_summary_runs (
-                summary_date DATE PRIMARY KEY,
-                status TEXT NOT NULL
-                    CHECK (status IN ('running', 'sent', 'error')),
-                recipient_count INTEGER NOT NULL DEFAULT 0,
-                sent_count INTEGER NOT NULL DEFAULT 0,
-                error_count INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        conn.execute(
-            """
             ALTER TABLE users
             ADD COLUMN IF NOT EXISTS daily_summary_enabled BOOLEAN NOT NULL DEFAULT FALSE
             """
@@ -560,73 +545,3 @@ def set_daily_summary_enabled(telegram_id: int, enabled: bool) -> User:
     if row is None:
         raise ValueError("Telegram user not found")
     return _row_to_user(row)
-
-
-def claim_daily_summary_run(summary_date) -> bool:
-    init_db()
-    with _connect() as conn:
-        with conn.transaction():
-            row = conn.execute(
-                """
-                INSERT INTO daily_summary_runs (summary_date, status)
-                VALUES (%s, 'running')
-                ON CONFLICT (summary_date) DO UPDATE SET
-                    status = 'running',
-                    updated_at = NOW(),
-                    last_error = NULL
-                WHERE daily_summary_runs.status = 'error'
-                   OR (
-                        daily_summary_runs.status = 'running'
-                        AND daily_summary_runs.updated_at < NOW() - INTERVAL '2 hours'
-                   )
-                RETURNING summary_date
-                """,
-                (summary_date,),
-            ).fetchone()
-    return row is not None
-
-
-def reset_daily_summary_run(summary_date) -> None:
-    init_db()
-    with _connect() as conn:
-        conn.execute(
-            """
-            DELETE FROM daily_summary_runs
-            WHERE summary_date = %s
-            """,
-            (summary_date,),
-        )
-
-
-def finish_daily_summary_run(
-    summary_date,
-    status: str,
-    recipient_count: int,
-    sent_count: int,
-    error_count: int,
-    last_error: Optional[str] = None,
-) -> None:
-    init_db()
-    if status not in ("sent", "error"):
-        raise ValueError("status must be 'sent' or 'error'")
-    with _connect() as conn:
-        conn.execute(
-            """
-            UPDATE daily_summary_runs
-            SET status = %s,
-                recipient_count = %s,
-                sent_count = %s,
-                error_count = %s,
-                last_error = %s,
-                updated_at = NOW()
-            WHERE summary_date = %s
-            """,
-            (
-                status,
-                recipient_count,
-                sent_count,
-                error_count,
-                last_error[:800] if last_error else None,
-                summary_date,
-            ),
-        )
