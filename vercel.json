@@ -11,6 +11,10 @@
     {
       "src": "api/daily_summary.py",
       "use": "@vercel/python"
+    },
+    {
+      "src": "api/daily_summary_browser.js",
+      "use": "@vercel/node"
     }
   ],
   "routes": [
@@ -21,6 +25,10 @@
     {
       "src": "/api/daily-summary",
       "dest": "/api/daily_summary.py"
+    },
+    {
+      "src": "/api/daily-summary-browser",
+      "dest": "/api/daily_summary_browser.js"
     },
     {
       "src": "/api/webhook",

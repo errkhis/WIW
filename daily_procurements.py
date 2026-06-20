@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Optional
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests as http
 from bs4 import BeautifulSoup
@@ -56,28 +56,80 @@ class ProcurementSummaryItem:
     consultation_url: str
 
 
-def fetch_daily_procurements(target_date: date) -> list[ProcurementSummaryItem]:
+def fetch_daily_procurements(
+    target_date: date,
+    browser_api_base_url: Optional[str] = None,
+) -> list[ProcurementSummaryItem]:
     target = target_date.strftime("%d/%m/%Y")
     end_date = (target_date + timedelta(days=1)).strftime("%d/%m/%Y")
-    html = _fetch_listing_html(target, end_date)
-    items = _parse_listing_items(html, target)
+    items = _fetch_listing_items_via_browser_api(target_date, browser_api_base_url)
+    if items is None:
+        html = _fetch_listing_html(target, end_date)
+        items = _parse_listing_items(html, target)
 
     return _with_detail_data(items)
 
 
+def _fetch_listing_items_via_browser_api(
+    target_date: date,
+    browser_api_base_url: Optional[str],
+) -> Optional[list[ProcurementSummaryItem]]:
+    base_url = (
+        (browser_api_base_url or "").strip().rstrip("/")
+        or os.environ.get("DAILY_SUMMARY_BROWSER_API_BASE_URL", "").strip().rstrip("/")
+        or os.environ.get("APP_BASE_URL", "").strip().rstrip("/")
+    )
+    if not base_url:
+        return None
+
+    secret = os.environ.get("CRON_SECRET", "").strip()
+    if not secret:
+        raise RuntimeError("daily_summary_browser_api_requires_cron_secret")
+
+    response = http.get(
+        f"{base_url}/api/daily-summary-browser",
+        params={"secret": secret, "date": target_date.isoformat()},
+        timeout=120,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("error") or "daily_summary_browser_api_failed")
+
+    return [
+        ProcurementSummaryItem(
+            reference=str(item.get("reference") or "").strip(),
+            title=str(item.get("title") or "").strip(),
+            estimated_price=None,
+            location=str(item.get("location") or "—").strip() or "—",
+            due_date=str(item.get("due_date") or "—").strip() or "—",
+            published_date=str(item.get("published_date") or "").strip(),
+            consultation_url=str(item.get("consultation_url") or "").strip(),
+        )
+        for item in payload.get("items") or []
+        if str(item.get("consultation_url") or "").strip()
+    ]
+
+
 def _fetch_listing_html(published_date: str, published_end_date: str) -> str:
-    chrome_path = _chrome_binary()
-    if chrome_path:
-        return _fetch_listing_html_in_browser(
-            chrome_path,
+    remote_base_url = _remote_chrome_base_url()
+    if remote_base_url:
+        return _fetch_listing_html_via_cdp_http(
+            remote_base_url,
             published_date,
             published_end_date,
         )
 
-    with http.Session() as session:
-        session.headers.update(SEARCH_HEADERS)
-        _apply_search_cookie(session)
-        return _fetch_simplified_open_tender_listing(session, published_date, published_end_date)
+    chrome_path = _chrome_binary()
+    if chrome_path:
+        return _fetch_listing_html_in_local_browser(
+            chrome_path,
+            published_date,
+            published_end_date,
+        )
+    raise RuntimeError(
+        "daily_summary_browser_required: no remote Chrome endpoint or local Chrome/Chromium binary found in runtime"
+    )
 
 
 def _apply_search_cookie(session: http.Session) -> None:
@@ -106,7 +158,21 @@ def _chrome_binary() -> str:
     return ""
 
 
-def _fetch_listing_html_in_browser(
+def _remote_chrome_base_url() -> str:
+    return (
+        os.environ.get("REMOTE_CHROME_HTTP_URL", "").strip()
+        or os.environ.get("CHROME_CDP_HTTP_URL", "").strip()
+    ).rstrip("/")
+
+
+def _remote_chrome_token() -> str:
+    return (
+        os.environ.get("REMOTE_CHROME_TOKEN", "").strip()
+        or os.environ.get("CHROME_CDP_TOKEN", "").strip()
+    )
+
+
+def _fetch_listing_html_in_local_browser(
     chrome_path: str,
     published_date: str,
     published_end_date: str,
@@ -132,13 +198,12 @@ def _fetch_listing_html_in_browser(
             text=True,
         )
         try:
-            _wait_for_devtools(port, process)
-            return asyncio.run(
-                _browser_search_listing_html(
-                    port,
-                    published_date,
-                    published_end_date,
-                )
+            base_url = f"http://127.0.0.1:{port}"
+            _wait_for_devtools(base_url, process)
+            return _fetch_listing_html_via_cdp_http(
+                base_url,
+                published_date,
+                published_end_date,
             )
         finally:
             _stop_process(process)
@@ -150,11 +215,11 @@ def _free_tcp_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_for_devtools(port: int, process: subprocess.Popen, timeout: float = 15.0) -> None:
+def _wait_for_devtools(base_url: str, process: Optional[subprocess.Popen], timeout: float = 15.0) -> None:
     deadline = time.time() + timeout
-    endpoint = f"http://127.0.0.1:{port}/json/version"
+    endpoint = _cdp_json_url(base_url, "/json/version")
     while time.time() < deadline:
-        if process.poll() is not None:
+        if process is not None and process.poll() is not None:
             raise RuntimeError("headless_chrome_exited_early")
         try:
             response = http.get(endpoint, timeout=1)
@@ -177,14 +242,42 @@ def _stop_process(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
 
 
+def _fetch_listing_html_via_cdp_http(
+    base_url: str,
+    published_date: str,
+    published_end_date: str,
+) -> str:
+    _wait_for_devtools(base_url, None)
+    return asyncio.run(
+        _browser_search_listing_html(
+            base_url,
+            published_date,
+            published_end_date,
+        )
+    )
+
+
+def _cdp_json_url(base_url: str, path: str, raw_first_query: str = "") -> str:
+    token = _remote_chrome_token()
+    query_parts = []
+    if raw_first_query:
+        query_parts.append(raw_first_query)
+    if token:
+        query_parts.append(f"token={quote(token, safe='')}")
+    query = ""
+    if query_parts:
+        query = "?" + "&".join(query_parts)
+    return f"{base_url.rstrip('/')}{path}{query}"
+
+
 async def _browser_search_listing_html(
-    port: int,
+    base_url: str,
     published_date: str,
     published_end_date: str,
 ) -> str:
     import websockets
 
-    target = http.put(f"http://127.0.0.1:{port}/json/new?about:blank", timeout=5)
+    target = http.put(_cdp_json_url(base_url, "/json/new", "about:blank"), timeout=10)
     target.raise_for_status()
     websocket_url = target.json()["webSocketDebuggerUrl"]
 

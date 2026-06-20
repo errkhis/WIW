@@ -5,6 +5,7 @@ import sys
 from io import BytesIO
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
@@ -61,6 +62,14 @@ def _summary_date(path: str) -> date:
     return datetime.now(CASABLANCA_TZ).date() - timedelta(days=1)
 
 
+def _request_base_url(handler) -> str:
+    proto = (handler.headers.get("x-forwarded-proto") or "https").strip()
+    host = (handler.headers.get("x-forwarded-host") or handler.headers.get("host") or "").strip()
+    if not host:
+        return os.environ.get("APP_BASE_URL", "").strip().rstrip("/")
+    return f"{proto}://{host}"
+
+
 def _send_message(chat_id: int, text: str) -> None:
     response = http.post(
         f"{TG}/sendMessage",
@@ -98,7 +107,7 @@ def _send_document(chat_id: int, filename: str, content: str) -> None:
     response.raise_for_status()
 
 
-def run_daily_summary(summary_date: date) -> dict:
+def run_daily_summary(summary_date: date, browser_api_base_url: Optional[str] = None) -> dict:
     recipients = list_daily_summary_recipients()
     recipient_count = len(recipients)
     if not recipients:
@@ -115,7 +124,7 @@ def run_daily_summary(summary_date: date) -> dict:
     sent_count = 0
     error_count = 0
     last_error = None
-    items = fetch_daily_procurements(summary_date)
+    items = fetch_daily_procurements(summary_date, browser_api_base_url=browser_api_base_url)
     summary_message = build_daily_summary_message(items, summary_date)
     html_document = build_daily_summary_html_document(items, summary_date)
     filename = f"resume-aos-{summary_date.isoformat()}.html"
@@ -147,7 +156,14 @@ class handler(BaseHTTPRequestHandler):
 
         try:
             summary_date = _summary_date(self.path)
-            _json_response(self, 200, run_daily_summary(summary_date))
+            _json_response(
+                self,
+                200,
+                run_daily_summary(
+                    summary_date,
+                    browser_api_base_url=_request_base_url(self),
+                ),
+            )
         except ValueError as exc:
             _json_response(self, 400, {"ok": False, "error": str(exc)})
         except DatabaseNotConfigured:
