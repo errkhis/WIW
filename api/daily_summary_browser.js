@@ -34,17 +34,6 @@ function nextDay(date) {
   return new Date(date.getTime() + 24 * 60 * 60 * 1000);
 }
 
-function clean(value) {
-  return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-function extractTitle(detailText) {
-  const text = clean(detailText);
-  const marker = text.toLowerCase().indexOf('objet :');
-  if (marker === -1) return text;
-  return clean(text.slice(marker + 'objet :'.length));
-}
-
 module.exports = async (req, res) => {
   if (!authorized(req)) {
     return res.status(401).json({ ok: false, error: 'unauthorized' });
@@ -102,6 +91,12 @@ module.exports = async (req, res) => {
         return matches && matches.length ? matches[matches.length - 1] : '';
       };
       const clean = (value) => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+      const extractTitle = (detailText) => {
+        const text = clean(detailText);
+        const marker = text.toLowerCase().indexOf('objet :');
+        if (marker === -1) return text;
+        return clean(text.slice(marker + 'objet :'.length));
+      };
 
       return rows.slice(2).map((row) => {
         const cells = Array.from(row.querySelectorAll('td'));
