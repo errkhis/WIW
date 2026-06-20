@@ -16,6 +16,7 @@ LIST_URL = f"{BASE_URL}/index.php?page=entreprise.EntrepriseAdvancedSearch&AllCo
 PAGE_SIZE_SELECT = "ctl0$CONTENU_PAGE$resultSearch$listePageSizeTop"
 PAGE_SIZE_SELECT_BOTTOM = "ctl0$CONTENU_PAGE$resultSearch$listePageSizeBottom"
 TELEGRAM_MESSAGE_LIMIT = 3900
+SIMPLIFIED_OPEN_TENDER_LABEL = "Appel d'offres ouvert simplifié"
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ def build_daily_summary_messages(
     date_label = target_date.strftime("%d/%m/%Y")
     if not items:
         return [
-            "📋 <b>Résumé quotidien - Appels d'offres simplifiés</b>\n\n"
+            "📋 <b>Résumé quotidien - Appels d'offres ouverts simplifiés</b>\n\n"
             f"Publié le: <b>{date_label}</b>\n"
             "Total: <b>0 consultation</b>\n\n"
             "Aucune consultation publiée hier."
@@ -71,7 +72,7 @@ def build_daily_summary_messages(
     total_parts = len(chunks)
     for index, chunk in enumerate(chunks, start=1):
         header = (
-            "📋 <b>Résumé quotidien - Appels d'offres simplifiés</b>\n"
+            "📋 <b>Résumé quotidien - Appels d'offres ouverts simplifiés</b>\n"
             f"Publié le: <b>{date_label}</b>\n"
             f"Total: <b>{len(items)} consultations</b>\n"
         )
@@ -146,6 +147,7 @@ def _parse_listing_row(row, published_date: str) -> Optional[ProcurementSummaryI
     procedure = meta_text.split(" ... ", 1)[0].strip()
     dates = re.findall(r"\d{2}/\d{2}/\d{4}", meta_text)
     row_published_date = dates[-1] if dates else ""
+    # The portal shows this mode as AOO plus the "Marché Public Simplifié" marker.
     if procedure != "AOO" or row_published_date != published_date:
         return None
     if not _has_simplified_marker(row):
@@ -262,6 +264,7 @@ def _extract_estimated_price(html: str) -> Optional[float]:
 def _format_item(index: int, item: ProcurementSummaryItem) -> str:
     return (
         f"{index}. <b>{_esc(_shorten(item.title, 800))}</b>\n"
+        f"Mode: <b>{_esc(SIMPLIFIED_OPEN_TENDER_LABEL)}</b>\n"
         f"Estimation: <b>{_fmt_price(item.estimated_price)}</b>\n"
         f"Lieu: {_esc(_shorten(item.location, 300))}\n"
         f"Date limite: <b>{_esc(item.due_date)}</b>\n"
