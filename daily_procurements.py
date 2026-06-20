@@ -21,28 +21,14 @@ from scraper import HEADERS, _parse_price_fr
 
 
 BASE_URL = "https://www.marchespublics.gov.ma"
-LIST_URL = f"{BASE_URL}/index.php?page=entreprise.EntrepriseAdvancedSearch&AllCons"
 SEARCH_URL = f"{BASE_URL}/index.php?page=entreprise.EntrepriseAdvancedSearch&searchAnnCons"
-ANNOUNCEMENT_TYPE_SELECT = "ctl0$CONTENU_PAGE$AdvancedSearch$annonceType"
 PROCEDURE_TYPE_SELECT = "ctl0$CONTENU_PAGE$AdvancedSearch$procedureType"
 PUBLISHED_DATE_START = "ctl0$CONTENU_PAGE$AdvancedSearch$dateMiseEnLigneCalculeStart"
 PUBLISHED_DATE_END = "ctl0$CONTENU_PAGE$AdvancedSearch$dateMiseEnLigneCalculeEnd"
 SEARCH_BUTTON = "ctl0$CONTENU_PAGE$AdvancedSearch$lancerRecherche"
 PAGE_SIZE_SELECT = "ctl0$CONTENU_PAGE$resultSearch$listePageSizeTop"
-PAGE_SIZE_SELECT_BOTTOM = "ctl0$CONTENU_PAGE$resultSearch$listePageSizeBottom"
 SIMPLIFIED_OPEN_TENDER_LABEL = "Appel d'offres ouvert simplifié"
-CONSULTATION_ANNOUNCEMENT_VALUE = "3"
 SIMPLIFIED_OPEN_TENDER_VALUE = "50"
-SEARCH_HEADERS = {
-    **HEADERS,
-    "Origin": BASE_URL,
-    "Referer": SEARCH_URL,
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
-}
 
 
 @dataclass(frozen=True)
@@ -50,6 +36,8 @@ class ProcurementSummaryItem:
     reference: str
     title: str
     estimated_price: Optional[float]
+    caution_amount: Optional[float]
+    has_documents: bool
     location: str
     due_date: str
     published_date: str
@@ -74,11 +62,7 @@ def _fetch_listing_items_via_browser_api(
     target_date: date,
     browser_api_base_url: Optional[str],
 ) -> Optional[list[ProcurementSummaryItem]]:
-    base_url = (
-        (browser_api_base_url or "").strip().rstrip("/")
-        or os.environ.get("DAILY_SUMMARY_BROWSER_API_BASE_URL", "").strip().rstrip("/")
-        or os.environ.get("APP_BASE_URL", "").strip().rstrip("/")
-    )
+    base_url = _browser_api_base_url(browser_api_base_url)
     if not base_url:
         return None
 
@@ -101,6 +85,8 @@ def _fetch_listing_items_via_browser_api(
             reference=str(item.get("reference") or "").strip(),
             title=str(item.get("title") or "").strip(),
             estimated_price=None,
+            caution_amount=None,
+            has_documents=False,
             location=str(item.get("location") or "—").strip() or "—",
             due_date=str(item.get("due_date") or "—").strip() or "—",
             published_date=str(item.get("published_date") or "").strip(),
@@ -109,6 +95,14 @@ def _fetch_listing_items_via_browser_api(
         for item in payload.get("items") or []
         if str(item.get("consultation_url") or "").strip()
     ]
+
+
+def _browser_api_base_url(browser_api_base_url: Optional[str]) -> str:
+    return (
+        (browser_api_base_url or "").strip().rstrip("/")
+        or os.environ.get("DAILY_SUMMARY_BROWSER_API_BASE_URL", "").strip().rstrip("/")
+        or os.environ.get("APP_BASE_URL", "").strip().rstrip("/")
+    )
 
 
 def _fetch_listing_html(published_date: str, published_end_date: str) -> str:
@@ -130,12 +124,6 @@ def _fetch_listing_html(published_date: str, published_end_date: str) -> str:
     raise RuntimeError(
         "daily_summary_browser_required: no remote Chrome endpoint or local Chrome/Chromium binary found in runtime"
     )
-
-
-def _apply_search_cookie(session: http.Session) -> None:
-    cookie = os.environ.get("MARCHES_PUBLICS_COOKIE", "").strip()
-    if cookie:
-        session.headers["Cookie"] = cookie
 
 
 def _chrome_binary() -> str:
@@ -446,6 +434,8 @@ def build_daily_summary_html_document(
             f"<td>{_html(item.reference)}</td>"
             f"<td>{_html(item.title)}</td>"
             f"<td>{_html(_fmt_price(item.estimated_price))}</td>"
+            f"<td>{_html(_fmt_price(item.caution_amount))}</td>"
+            f"<td>{_html(_yes_no(item.has_documents))}</td>"
             f"<td>{_html(item.location)}</td>"
             f"<td>{_html(item.due_date)}</td>"
             f"<td><a href=\"{_html(item.consultation_url)}\">Consultation</a></td>"
@@ -453,7 +443,7 @@ def build_daily_summary_html_document(
         )
 
     table_rows = "\n".join(rows) or (
-        "<tr><td colspan=\"7\">Aucune consultation publiee pour cette date.</td></tr>"
+        "<tr><td colspan=\"9\">Aucune consultation publiee pour cette date.</td></tr>"
     )
     return f"""<!doctype html>
 <html lang="fr">
@@ -554,6 +544,8 @@ def build_daily_summary_html_document(
             <th>Reference</th>
             <th>Objet</th>
             <th>Estimation</th>
+            <th>Caution</th>
+            <th>Documents</th>
             <th>Lieu</th>
             <th>Date limite</th>
             <th>Lien</th>
@@ -568,79 +560,6 @@ def build_daily_summary_html_document(
 </body>
 </html>
 """
-
-
-def _fetch_simplified_open_tender_listing(
-    session: http.Session,
-    published_date: str,
-    published_end_date: str,
-) -> str:
-    session.headers.update(SEARCH_HEADERS)
-    response = session.get(SEARCH_URL, timeout=30)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "lxml")
-    form = soup.find("form")
-    if not form:
-        raise ValueError("Advanced search form not found")
-
-    data = _form_data(form)
-    data.pop(ANNOUNCEMENT_TYPE_SELECT, None)
-    data[PROCEDURE_TYPE_SELECT] = SIMPLIFIED_OPEN_TENDER_VALUE
-    data[PUBLISHED_DATE_START] = published_date
-    data[PUBLISHED_DATE_END] = published_end_date
-    data["PRADO_POSTBACK_TARGET"] = SEARCH_BUTTON
-    data["PRADO_POSTBACK_PARAMETER"] = "undefined"
-
-    action_url = urljoin(SEARCH_URL, form.get("action") or SEARCH_URL)
-    response = session.post(action_url, data=data, timeout=45)
-    response.raise_for_status()
-    return _set_page_size_500(session, response.text, response.url)
-
-
-def _set_page_size_500(session: http.Session, html: str, page_url: str) -> str:
-    soup = BeautifulSoup(html, "lxml")
-    if not soup.find("table", class_="table-results"):
-        return html
-    form = soup.find("form")
-    if not form:
-        return html
-
-    data = _form_data(form)
-    if PAGE_SIZE_SELECT not in data:
-        return html
-
-    data[PAGE_SIZE_SELECT] = "500"
-    data[PAGE_SIZE_SELECT_BOTTOM] = "500"
-    data["PRADO_POSTBACK_TARGET"] = PAGE_SIZE_SELECT
-    data["PRADO_POSTBACK_PARAMETER"] = ""
-
-    action_url = urljoin(page_url, form.get("action") or page_url)
-    response = session.post(action_url, data=data, timeout=45)
-    response.raise_for_status()
-    return response.text
-
-
-def _form_data(form) -> dict[str, str]:
-    data: dict[str, str] = {}
-    for tag in form.find_all(["input", "select", "textarea"]):
-        if tag.has_attr("disabled"):
-            continue
-        name = tag.get("name")
-        if not name:
-            continue
-        if tag.name == "select":
-            selected = tag.find("option", selected=True) or tag.find("option")
-            data[name] = selected.get("value", "") if selected else ""
-        elif tag.name == "textarea":
-            data[name] = tag.get_text()
-        else:
-            input_type = (tag.get("type") or "text").lower()
-            if input_type in ("submit", "image", "reset", "button"):
-                continue
-            if input_type in ("checkbox", "radio") and not tag.has_attr("checked"):
-                continue
-            data[name] = tag.get("value", "")
-    return data
 
 
 def _parse_listing_items(html: str, published_date: str) -> list[ProcurementSummaryItem]:
@@ -685,6 +604,8 @@ def _parse_listing_row(row, published_date: str) -> Optional[ProcurementSummaryI
         reference=reference,
         title=title,
         estimated_price=None,
+        caution_amount=None,
+        has_documents=False,
         location=location,
         due_date=due_date,
         published_date=row_published_date,
@@ -695,7 +616,7 @@ def _detail_url(row) -> str:
     for link in row.find_all("a", href=True):
         href = link["href"]
         if "EntrepriseDetailConsultation" in href:
-            return urljoin(LIST_URL, href)
+            return urljoin(BASE_URL, href)
     return ""
 
 
@@ -756,7 +677,12 @@ def _fetch_detail_data(item: ProcurementSummaryItem) -> Optional[ProcurementSumm
     response.raise_for_status()
     if not _is_simplified_open_tender_detail(response.text):
         return None
-    return replace(item, estimated_price=_extract_estimated_price(response.text))
+    return replace(
+        item,
+        estimated_price=_extract_estimated_price(response.text),
+        caution_amount=_extract_caution_amount(response.text),
+        has_documents=_extract_has_documents(response.text),
+    )
 
 
 def _is_simplified_open_tender_detail(html: str) -> bool:
@@ -778,8 +704,37 @@ def _extract_estimated_price(html: str) -> Optional[float]:
     return _parse_price_fr(match.group(1))
 
 
+def _extract_caution_amount(html: str) -> Optional[float]:
+    text = _clean(BeautifulSoup(html, "lxml").get_text(" ", strip=True))
+    match = re.search(
+        r"Caution\s+provisoire\s*:\s*([0-9][0-9\s.,]*)",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    return _parse_price_fr(match.group(1))
+
+
+def _extract_has_documents(html: str) -> bool:
+    text = _clean(BeautifulSoup(html, "lxml").get_text(" ", strip=True))
+    match = re.search(
+        r"Prospectus,\s*notices\s+ou\s+autres\s+documents\s*:\s*(.+?)\s+(?:Réunion|Visites des lieux|Variante)\s*:",
+        text,
+        re.I,
+    )
+    if not match:
+        return False
+    value = match.group(1).strip()
+    return value not in {"-", "—", ""}
+
+
 def _fmt_price(value: Optional[float]) -> str:
     return "—" if value is None else f"{value:,.2f} Dhs TTC"
+
+
+def _yes_no(value: bool) -> str:
+    return "Oui" if value else "Non"
 
 
 def _clean(value: str) -> str:

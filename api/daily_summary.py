@@ -70,24 +70,16 @@ def _request_base_url(handler) -> str:
     return f"{proto}://{host}"
 
 
-def _send_message(chat_id: int, text: str) -> None:
-    response = http.post(
-        f"{TG}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        },
-        timeout=15,
-    )
-    response.raise_for_status()
-
-
-def _send_document(chat_id: int, filename: str, content: str) -> None:
+def _send_document(
+    session: http.Session,
+    chat_id: int,
+    filename: str,
+    content: str,
+    caption: str,
+) -> None:
     payload = {
         "chat_id": str(chat_id),
-        "caption": "Fichier HTML du résumé quotidien.",
+        "caption": caption,
         "parse_mode": "HTML",
         "disable_content_type_detection": "true",
     }
@@ -98,7 +90,7 @@ def _send_document(chat_id: int, filename: str, content: str) -> None:
             "text/html; charset=utf-8",
         )
     }
-    response = http.post(
+    response = session.post(
         f"{TG}/sendDocument",
         data=payload,
         files=files,
@@ -129,15 +121,21 @@ def run_daily_summary(summary_date: date, browser_api_base_url: Optional[str] = 
     html_document = build_daily_summary_html_document(items, summary_date)
     filename = f"resume-aos-{summary_date.isoformat()}.html"
 
-    for telegram_id in recipients:
-        try:
-            _send_message(telegram_id, summary_message)
-            _send_document(telegram_id, filename, html_document)
-            sent_count += 1
-        except Exception as exc:
-            error_count += 1
-            last_error = str(exc)
-            log.exception("Daily summary send failed for %s", telegram_id)
+    with http.Session() as session:
+        for telegram_id in recipients:
+            try:
+                _send_document(
+                    session,
+                    telegram_id,
+                    filename,
+                    html_document,
+                    summary_message,
+                )
+                sent_count += 1
+            except Exception as exc:
+                error_count += 1
+                last_error = str(exc)
+                log.exception("Daily summary send failed for %s", telegram_id)
 
     return {
         "ok": error_count == 0,
@@ -148,6 +146,8 @@ def run_daily_summary(summary_date: date, browser_api_base_url: Optional[str] = 
         "errors": error_count,
         "last_error": last_error,
     }
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not _is_authorized(self.path):
