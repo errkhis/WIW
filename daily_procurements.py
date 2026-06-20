@@ -458,7 +458,8 @@ def build_daily_summary_html_document(
       --line: #d7d0c2;
       --accent: #0d5c63;
       --accent-soft: #e1f0ef;
-      --fournitures: #fff2c7;
+      --fournitures: #ffd966;
+      --fournitures-border: #c58a00;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -514,6 +515,9 @@ def build_daily_summary_html_document(
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }}
+    tbody tr.row-fournitures {{
+      box-shadow: inset 6px 0 0 var(--fournitures-border);
+    }}
     tbody tr.row-fournitures td {{
       background: var(--fournitures);
     }}
@@ -536,6 +540,10 @@ def build_daily_summary_html_document(
         border-radius: 14px;
         overflow: hidden;
         background: #fffdf8;
+      }}
+      tbody tr.row-fournitures {{
+        border-color: var(--fournitures-border);
+        box-shadow: inset 8px 0 0 var(--fournitures-border);
       }}
       td {{
         padding: 10px 12px;
